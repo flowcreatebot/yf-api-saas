@@ -12,13 +12,26 @@ class CheckoutSessionRequest(BaseModel):
     success_url: HttpUrl
     cancel_url: HttpUrl
 
+    @staticmethod
+    def _allowed_redirect_hosts() -> set[str]:
+        return {
+            host.strip().lower()
+            for host in settings.billing_allowed_redirect_hosts.split(",")
+            if host.strip()
+        }
+
     @field_validator("success_url", "cancel_url")
     @classmethod
     def validate_redirect_url(cls, v: HttpUrl) -> HttpUrl:
         host = (v.host or "").lower()
-        if v.scheme == "https" or host in {"localhost", "127.0.0.1"}:
-            return v
-        raise ValueError("Redirect URLs must use https (localhost allowed for development)")
+        if not (v.scheme == "https" or host in {"localhost", "127.0.0.1"}):
+            raise ValueError("Redirect URLs must use https (localhost allowed for development)")
+
+        allowed_hosts = cls._allowed_redirect_hosts()
+        if allowed_hosts and host not in allowed_hosts:
+            raise ValueError(f"Redirect URL host '{host}' is not in BILLING_ALLOWED_REDIRECT_HOSTS")
+
+        return v
 
 
 @router.get("/plans")

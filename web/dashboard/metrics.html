@@ -14,6 +14,7 @@
           <a class="btn nav-btn" data-nav="overview" href="./app.html">Overview</a>
           <a class="btn nav-btn" data-nav="keys" href="./keys.html">API Keys</a>
           <a class="btn nav-btn" data-nav="metrics" href="./metrics.html">Usage & Metrics</a>
+          <a class="btn nav-btn" data-nav="activity" href="./activity.html">Activity</a>
           <hr style="border-color: var(--border); margin: 14px 0;" />
           <button class="btn" onclick="dashboardApp.logoutPlaceholder()">Sign out</button>
           <p class="small" style="margin-top: 10px;">Auth is placeholder-only in v0.</p>
@@ -27,13 +28,19 @@
             </div>
             <p>Shell for endpoint usage, latency, and error insights.</p>
 
+            <div class="range-controls" role="group" aria-label="Metrics time range">
+              <button class="btn btn-sm" data-range="24h" onclick="dashboardApp.selectMetricsRange('24h')">Last 24h</button>
+              <button class="btn btn-sm" data-range="7d" onclick="dashboardApp.selectMetricsRange('7d')">Last 7d</button>
+              <button class="btn btn-sm" data-range="30d" onclick="dashboardApp.selectMetricsRange('30d')">Last 30d</button>
+            </div>
+
             <div class="grid-2">
               <div class="kpi">
                 <div class="label">p95 latency</div>
                 <div class="value" id="kpi-p95">— ms</div>
               </div>
               <div class="kpi">
-                <div class="label">5xx (24h)</div>
+                <div class="label" id="kpi-5xx-label">5xx (24h)</div>
                 <div class="value" id="kpi-5xx">—</div>
               </div>
             </div>
@@ -42,7 +49,7 @@
               <thead>
                 <tr>
                   <th>Endpoint</th>
-                  <th>Requests</th>
+                  <th id="requests-col-label">Requests (24h)</th>
                   <th>Error %</th>
                   <th>p95</th>
                 </tr>

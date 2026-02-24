@@ -1,8 +1,17 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 client = TestClient(app)
+
+
+PROTECTED_ENDPOINTS = [
+    '/v1/quote/AAPL',
+    '/v1/quotes?symbols=AAPL,MSFT',
+    '/v1/history/AAPL?period=1mo&interval=1d',
+    '/v1/fundamentals/AAPL',
+]
 
 
 def test_health_ok():
@@ -11,14 +20,18 @@ def test_health_ok():
     assert r.json().get('ok') is True
 
 
-def test_quote_requires_api_key():
-    r = client.get('/v1/quote/AAPL')
+@pytest.mark.parametrize('endpoint', PROTECTED_ENDPOINTS)
+def test_protected_endpoints_require_api_key(endpoint):
+    r = client.get(endpoint)
     assert r.status_code == 401
+    assert r.json()['detail'] == 'Missing API key'
 
 
-def test_quote_rejects_wrong_api_key(monkeypatch):
-    r = client.get('/v1/quote/AAPL', headers={'x-api-key': 'wrong'})
+@pytest.mark.parametrize('endpoint', PROTECTED_ENDPOINTS)
+def test_protected_endpoints_reject_wrong_api_key(endpoint):
+    r = client.get(endpoint, headers={'x-api-key': 'wrong'})
     assert r.status_code == 401
+    assert r.json()['detail'] == 'Invalid API key'
 
 
 def test_quote_accepts_additional_valid_key(monkeypatch):

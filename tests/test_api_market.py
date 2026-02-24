@@ -59,6 +59,82 @@ class DummyTicker:
         }
 
 
+class FlakyTicker:
+    fail_mode = False
+
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+
+    @property
+    def fast_info(self):
+        if FlakyTicker.fail_mode:
+            raise RuntimeError('upstream down')
+        return {
+            'currency': 'USD',
+            'exchange': 'NMS',
+            'lastPrice': 200.0,
+            'open': 199.0,
+            'dayHigh': 201.0,
+            'dayLow': 198.0,
+            'previousClose': 198.5,
+            'lastVolume': 500,
+            'marketCap': 50,
+        }
+
+    @property
+    def info(self):
+        if FlakyTicker.fail_mode:
+            raise RuntimeError('upstream down')
+        return {
+            'longName': 'Flaky Inc',
+            'sector': 'Tech',
+            'industry': 'Infra',
+            'website': 'https://example.org',
+            'trailingPE': 10,
+            'forwardPE': 9,
+            'priceToBook': 2,
+            'dividendYield': 0,
+            'beta': 1,
+            'fiftyTwoWeekHigh': 20,
+            'fiftyTwoWeekLow': 10,
+        }
+
+
+class NonFiniteTicker:
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+
+    @property
+    def fast_info(self):
+        return {
+            'currency': 'USD',
+            'exchange': 'NMS',
+            'lastPrice': float('nan'),
+            'open': float('inf'),
+            'dayHigh': 201.0,
+            'dayLow': float('-inf'),
+            'previousClose': 198.5,
+            'lastVolume': float('nan'),
+            'marketCap': float('inf'),
+        }
+
+    @property
+    def info(self):
+        return {
+            'longName': 'Sanitized Inc',
+            'sector': 'Tech',
+            'industry': 'Infra',
+            'website': 'https://example.org',
+            'trailingPE': float('nan'),
+            'forwardPE': float('inf'),
+            'priceToBook': 2,
+            'dividendYield': float('-inf'),
+            'beta': 1,
+            'fiftyTwoWeekHigh': float('nan'),
+            'fiftyTwoWeekLow': 10,
+        }
+
+
 def _auth_headers():
     return {'x-api-key': settings.api_master_key}
 
@@ -72,6 +148,7 @@ def test_quote_ok(monkeypatch):
     body = r.json()
     assert body['symbol'] == 'AAPL'
     assert body['last_price'] == 123.45
+    assert body['stale'] is False
 
 
 def test_quotes_batch_mixed(monkeypatch):
@@ -105,6 +182,7 @@ def test_fundamentals_ok(monkeypatch):
     body = r.json()
     assert body['symbol'] == 'AAPL'
     assert body['sector'] == 'Technology'
+    assert body['stale'] is False
 
 
 def test_history_invalid_period_400(monkeypatch):
@@ -113,6 +191,7 @@ def test_history_invalid_period_400(monkeypatch):
 
     r = client.get('/v1/history/AAPL?period=13mo&interval=1d', headers=_auth_headers())
     assert r.status_code == 400
+    assert r.json()['detail'] == 'Invalid period'
 
 
 def test_history_invalid_interval_400(monkeypatch):
@@ -121,6 +200,7 @@ def test_history_invalid_interval_400(monkeypatch):
 
     r = client.get('/v1/history/AAPL?period=1mo&interval=2h', headers=_auth_headers())
     assert r.status_code == 400
+    assert r.json()['detail'] == 'Invalid interval'
 
 
 def test_history_start_gt_end_400(monkeypatch):
@@ -130,3 +210,85 @@ def test_history_start_gt_end_400(monkeypatch):
     r = client.get('/v1/history/AAPL?period=1mo&interval=1d&start=2026-02-01&end=2026-01-01', headers=_auth_headers())
     assert r.status_code == 400
     assert r.json()['detail'] == 'start must be <= end'
+
+
+def test_quote_sanitizes_non_finite_numbers_to_null(monkeypatch):
+    import app.routes.market as market
+    monkeypatch.setattr(market.yf, 'Ticker', NonFiniteTicker)
+
+    r = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['last_price'] is None
+    assert body['open'] is None
+    assert body['day_low'] is None
+    assert body['volume'] is None
+    assert body['market_cap'] is None
+
+
+def test_quotes_batch_sanitizes_non_finite_numbers_to_null(monkeypatch):
+    import app.routes.market as market
+    monkeypatch.setattr(market.yf, 'Ticker', NonFiniteTicker)
+
+    r = client.get('/v1/quotes?symbols=AAPL,MSFT', headers=_auth_headers())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['count'] == 2
+    for row in body['data']:
+        assert row['ok'] is True
+        assert row['last_price'] is None
+        assert row['open'] is None
+        assert row['day_low'] is None
+        assert row['volume'] is None
+        assert row['market_cap'] is None
+
+
+def test_fundamentals_sanitizes_non_finite_numbers_to_null(monkeypatch):
+    import app.routes.market as market
+    monkeypatch.setattr(market.yf, 'Ticker', NonFiniteTicker)
+
+    r = client.get('/v1/fundamentals/AAPL', headers=_auth_headers())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['trailing_pe'] is None
+    assert body['forward_pe'] is None
+    assert body['dividend_yield'] is None
+    assert body['fifty_two_week_high'] is None
+
+
+def test_quote_uses_stale_cache_on_upstream_failure(monkeypatch):
+    import app.routes.market as market
+
+    market._CACHE.clear()
+    monkeypatch.setattr(market, 'time', type('T', (), {'time': staticmethod(lambda: 1000.0)}))
+    FlakyTicker.fail_mode = False
+    monkeypatch.setattr(market.yf, 'Ticker', FlakyTicker)
+
+    warm = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    assert warm.status_code == 200
+    assert warm.json()['stale'] is False
+
+    monkeypatch.setattr(market, 'time', type('T', (), {'time': staticmethod(lambda: 1040.0)}))
+    FlakyTicker.fail_mode = True
+    stale = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    assert stale.status_code == 200
+    assert stale.json()['stale'] is True
+
+
+def test_fundamentals_uses_stale_cache_on_upstream_failure(monkeypatch):
+    import app.routes.market as market
+
+    market._CACHE.clear()
+    monkeypatch.setattr(market, 'time', type('T', (), {'time': staticmethod(lambda: 2000.0)}))
+    FlakyTicker.fail_mode = False
+    monkeypatch.setattr(market.yf, 'Ticker', FlakyTicker)
+
+    warm = client.get('/v1/fundamentals/AAPL', headers=_auth_headers())
+    assert warm.status_code == 200
+    assert warm.json()['stale'] is False
+
+    monkeypatch.setattr(market, 'time', type('T', (), {'time': staticmethod(lambda: 2040.0)}))
+    FlakyTicker.fail_mode = True
+    stale = client.get('/v1/fundamentals/AAPL', headers=_auth_headers())
+    assert stale.status_code == 200
+    assert stale.json()['stale'] is True

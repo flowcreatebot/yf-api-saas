@@ -36,15 +36,60 @@ def test_dashboard_metrics_shell_served():
     assert 'Usage & Metrics' in r.text
 
 
+def test_dashboard_activity_shell_served():
+    r = client.get('/internal/dashboard/activity.html')
+    assert r.status_code == 200
+    assert 'Recent Activity' in r.text
+
+
 def test_dashboard_overview_placeholder_api_payload():
     r = client.get('/internal/api/overview')
     assert r.status_code == 200
 
     payload = r.json()
     assert payload['source'] == 'placeholder'
+    assert payload['range'] == '24h'
     assert payload['requests24h'] > 0
+    assert payload['requests'] == payload['requests24h']
+    assert payload['fiveXx'] == payload['fiveXx24h']
     assert isinstance(payload['topEndpoints'], list)
     assert payload['topEndpoints'][0]['path'].startswith('/v1/')
+
+
+def test_dashboard_overview_placeholder_range_query_contract():
+    default_payload = client.get('/internal/api/overview').json()
+
+    r_7d = client.get('/internal/api/overview?range=7d')
+    assert r_7d.status_code == 200
+    payload_7d = r_7d.json()
+    assert payload_7d['range'] == '7d'
+
+    r_30d = client.get('/internal/api/overview?range=30d')
+    assert r_30d.status_code == 200
+    payload_30d = r_30d.json()
+    assert payload_30d['range'] == '30d'
+
+    assert payload_7d['requests'] > default_payload['requests']
+    assert payload_30d['requests'] > payload_7d['requests']
+
+
+def test_dashboard_overview_invalid_range_rejected():
+    r = client.get('/internal/api/overview?range=1y')
+    assert r.status_code == 422
+
+
+def test_dashboard_activity_api_payload():
+    r = client.get('/internal/api/activity')
+    assert r.status_code == 200
+
+    payload = r.json()
+    assert payload['source'] == 'placeholder'
+    assert isinstance(payload['events'], list)
+    first = payload['events'][0]
+    assert first['actor']
+    assert first['action']
+    assert first['status'] in ('success', 'info')
+    assert first['target']
 
 
 def test_dashboard_keys_api_payload():

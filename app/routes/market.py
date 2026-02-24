@@ -1,9 +1,8 @@
 from datetime import date
+import math
 import re
 import threading
 import time
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 import yfinance as yf
 
@@ -16,49 +15,8 @@ SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
 ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
 ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
 
-
-class _InMemoryTTLCache:
-    def __init__(self, ttl_seconds: int, stale_window_seconds: int):
-        self.ttl_seconds = max(1, int(ttl_seconds))
-        self.stale_window_seconds = max(self.ttl_seconds, int(stale_window_seconds))
-        self._items: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._lock = threading.Lock()
-
-    def get_fresh(self, key: str) -> dict[str, Any] | None:
-        with self._lock:
-            item = self._items.get(key)
-        if item is None:
-            return None
-
-        fetched_at, payload = item
-        if (time.time() - fetched_at) <= self.ttl_seconds:
-            return payload
-        return None
-
-    def get_stale(self, key: str) -> dict[str, Any] | None:
-        with self._lock:
-            item = self._items.get(key)
-        if item is None:
-            return None
-
-        fetched_at, payload = item
-        if (time.time() - fetched_at) <= self.stale_window_seconds:
-            return payload
-        return None
-
-    def set(self, key: str, payload: dict[str, Any]) -> None:
-        with self._lock:
-            self._items[key] = (time.time(), payload)
-
-
-_market_cache = _InMemoryTTLCache(
-    ttl_seconds=settings.market_cache_ttl_seconds,
-    stale_window_seconds=settings.market_cache_stale_window_seconds,
-)
-
-
-def _cache_key(endpoint: str, symbol: str) -> str:
-    return f"{endpoint}:{symbol}"
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _normalize_symbol(raw_symbol: str) -> str:
@@ -66,6 +24,47 @@ def _normalize_symbol(raw_symbol: str) -> str:
     if not SYMBOL_RE.fullmatch(symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol format")
     return symbol
+
+
+def _cache_get(key: str) -> tuple[dict | None, bool]:
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = _CACHE.get(key)
+
+    if entry is None:
+        return None, False
+
+    created_at, payload = entry
+    age = now - created_at
+    if age <= settings.market_cache_ttl_seconds:
+        return payload, False
+    if age <= settings.market_cache_stale_window_seconds:
+        return payload, True
+    return None, False
+
+
+def _cache_set(key: str, payload: dict) -> None:
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.time(), payload)
+
+
+def _to_finite_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _to_finite_int(value) -> int | None:
+    parsed = _to_finite_float(value)
+    if parsed is None:
+        return None
+    return int(parsed)
 
 
 @router.get("/health")
@@ -76,19 +75,15 @@ def health():
 @router.get("/quote/{symbol}")
 def quote(symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
-    key = _cache_key("quote", symbol)
-
-    cached = _market_cache.get_fresh(key)
-    if cached is not None:
-        return {**cached, "stale": False}
+    cache_key = f"quote:{symbol}"
 
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info or {}
     except Exception as exc:
-        stale = _market_cache.get_stale(key)
-        if stale is not None:
-            return {**stale, "stale": True}
+        cached, is_stale = _cache_get(cache_key)
+        if cached is not None and is_stale:
+            return {**cached, "stale": True}
         raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
 
     if not info:
@@ -98,15 +93,15 @@ def quote(symbol: str, _: str = Depends(require_api_key)):
         "symbol": symbol.upper(),
         "currency": info.get("currency"),
         "exchange": info.get("exchange"),
-        "last_price": info.get("lastPrice"),
-        "open": info.get("open"),
-        "day_high": info.get("dayHigh"),
-        "day_low": info.get("dayLow"),
-        "previous_close": info.get("previousClose"),
-        "volume": info.get("lastVolume"),
-        "market_cap": info.get("marketCap"),
+        "last_price": _to_finite_float(info.get("lastPrice")),
+        "open": _to_finite_float(info.get("open")),
+        "day_high": _to_finite_float(info.get("dayHigh")),
+        "day_low": _to_finite_float(info.get("dayLow")),
+        "previous_close": _to_finite_float(info.get("previousClose")),
+        "volume": _to_finite_int(info.get("lastVolume")),
+        "market_cap": _to_finite_int(info.get("marketCap")),
     }
-    _market_cache.set(key, payload)
+    _cache_set(cache_key, payload)
     return {**payload, "stale": False}
 
 
@@ -144,11 +139,11 @@ def history(
         rows.append(
             {
                 "ts": idx.isoformat(),
-                "open": None if row.get("Open") is None else float(row["Open"]),
-                "high": None if row.get("High") is None else float(row["High"]),
-                "low": None if row.get("Low") is None else float(row["Low"]),
-                "close": None if row.get("Close") is None else float(row["Close"]),
-                "volume": None if row.get("Volume") is None else int(row["Volume"]),
+                "open": _to_finite_float(row.get("Open")),
+                "high": _to_finite_float(row.get("High")),
+                "low": _to_finite_float(row.get("Low")),
+                "close": _to_finite_float(row.get("Close")),
+                "volume": _to_finite_int(row.get("Volume")),
             }
         )
 
@@ -176,19 +171,14 @@ def quotes(
 
     results = []
     for symbol in normalized_symbols:
-        key = _cache_key("quote", symbol)
-        cached = _market_cache.get_fresh(key)
-        if cached is not None:
-            results.append({**cached, "ok": True, "stale": False})
-            continue
-
+        cache_key = f"quote:{symbol}"
         try:
             ticker = yf.Ticker(symbol)
             info = ticker.fast_info or {}
         except Exception:
-            stale = _market_cache.get_stale(key)
-            if stale is not None:
-                results.append({**stale, "ok": True, "stale": True})
+            cached, is_stale = _cache_get(cache_key)
+            if cached is not None and is_stale:
+                results.append({**cached, "ok": True, "stale": True})
             else:
                 results.append({"symbol": symbol, "ok": False, "error": "upstream_error"})
             continue
@@ -200,15 +190,15 @@ def quotes(
         payload = {
             "symbol": symbol,
             "currency": info.get("currency"),
-            "last_price": info.get("lastPrice"),
-            "open": info.get("open"),
-            "day_high": info.get("dayHigh"),
-            "day_low": info.get("dayLow"),
-            "previous_close": info.get("previousClose"),
-            "volume": info.get("lastVolume"),
-            "market_cap": info.get("marketCap"),
+            "last_price": _to_finite_float(info.get("lastPrice")),
+            "open": _to_finite_float(info.get("open")),
+            "day_high": _to_finite_float(info.get("dayHigh")),
+            "day_low": _to_finite_float(info.get("dayLow")),
+            "previous_close": _to_finite_float(info.get("previousClose")),
+            "volume": _to_finite_int(info.get("lastVolume")),
+            "market_cap": _to_finite_int(info.get("marketCap")),
         }
-        _market_cache.set(key, payload)
+        _cache_set(cache_key, payload)
         results.append({**payload, "ok": True, "stale": False})
 
     return {"count": len(results), "data": results}
@@ -217,19 +207,14 @@ def quotes(
 @router.get("/fundamentals/{symbol}")
 def fundamentals(symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
-    key = _cache_key("fundamentals", symbol)
-
-    cached = _market_cache.get_fresh(key)
-    if cached is not None:
-        return {**cached, "stale": False}
-
+    cache_key = f"fundamentals:{symbol}"
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info or {}
     except Exception as exc:
-        stale = _market_cache.get_stale(key)
-        if stale is not None:
-            return {**stale, "stale": True}
+        cached, is_stale = _cache_get(cache_key)
+        if cached is not None and is_stale:
+            return {**cached, "stale": True}
         raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
 
     if not info:
@@ -241,13 +226,14 @@ def fundamentals(symbol: str, _: str = Depends(require_api_key)):
         "sector": info.get("sector"),
         "industry": info.get("industry"),
         "website": info.get("website"),
-        "trailing_pe": info.get("trailingPE"),
-        "forward_pe": info.get("forwardPE"),
-        "price_to_book": info.get("priceToBook"),
-        "dividend_yield": info.get("dividendYield"),
-        "beta": info.get("beta"),
-        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+        "trailing_pe": _to_finite_float(info.get("trailingPE")),
+        "forward_pe": _to_finite_float(info.get("forwardPE")),
+        "price_to_book": _to_finite_float(info.get("priceToBook")),
+        "dividend_yield": _to_finite_float(info.get("dividendYield")),
+        "beta": _to_finite_float(info.get("beta")),
+        "fifty_two_week_high": _to_finite_float(info.get("fiftyTwoWeekHigh")),
+        "fifty_two_week_low": _to_finite_float(info.get("fiftyTwoWeekLow")),
     }
-    _market_cache.set(key, payload)
+    _cache_set(cache_key, payload)
+
     return {**payload, "stale": False}

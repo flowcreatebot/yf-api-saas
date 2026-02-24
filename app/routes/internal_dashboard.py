@@ -5,10 +5,48 @@ from threading import Lock
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/internal/api", tags=["internal-dashboard"])
+
+OverviewRange = Literal["24h", "7d", "30d"]
+
+_OVERVIEW_BY_RANGE: dict[OverviewRange, dict] = {
+    "24h": {
+        "requests": 12842,
+        "errorRatePct": 0.62,
+        "p95LatencyMs": 184,
+        "fiveXx": 9,
+        "topEndpoints": [
+            {"path": "/v1/quote/{symbol}", "requests": 8120, "errorPct": 0.41, "p95Ms": 142},
+            {"path": "/v1/history/{symbol}", "requests": 2990, "errorPct": 0.95, "p95Ms": 246},
+            {"path": "/v1/quotes", "requests": 1732, "errorPct": 0.78, "p95Ms": 201},
+        ],
+    },
+    "7d": {
+        "requests": 90587,
+        "errorRatePct": 0.58,
+        "p95LatencyMs": 191,
+        "fiveXx": 55,
+        "topEndpoints": [
+            {"path": "/v1/quote/{symbol}", "requests": 58130, "errorPct": 0.39, "p95Ms": 151},
+            {"path": "/v1/history/{symbol}", "requests": 20077, "errorPct": 0.81, "p95Ms": 252},
+            {"path": "/v1/quotes", "requests": 12380, "errorPct": 0.66, "p95Ms": 209},
+        ],
+    },
+    "30d": {
+        "requests": 381204,
+        "errorRatePct": 0.71,
+        "p95LatencyMs": 203,
+        "fiveXx": 320,
+        "topEndpoints": [
+            {"path": "/v1/quote/{symbol}", "requests": 243872, "errorPct": 0.48, "p95Ms": 159},
+            {"path": "/v1/history/{symbol}", "requests": 86241, "errorPct": 1.02, "p95Ms": 266},
+            {"path": "/v1/quotes", "requests": 51091, "errorPct": 0.84, "p95Ms": 216},
+        ],
+    },
+}
 
 
 class DashboardKey(BaseModel):
@@ -89,19 +127,51 @@ def _missing_key_error(action: str, key_id: str) -> HTTPException:
 
 
 @router.get("/overview")
-def get_dashboard_overview():
+def get_dashboard_overview(range: OverviewRange = Query(default="24h")):
     """Placeholder dashboard payload until real analytics pipeline is wired."""
+    selected = _OVERVIEW_BY_RANGE[range]
     return {
-        "requests24h": 12842,
-        "errorRatePct": 0.62,
-        "p95LatencyMs": 184,
-        "fiveXx24h": 9,
-        "topEndpoints": [
-            {"path": "/v1/quote/{symbol}", "requests": 8120, "errorPct": 0.41, "p95Ms": 142},
-            {"path": "/v1/history/{symbol}", "requests": 2990, "errorPct": 0.95, "p95Ms": 246},
-            {"path": "/v1/quotes", "requests": 1732, "errorPct": 0.78, "p95Ms": 201},
-        ],
+        # Keep legacy keys for default shell compatibility.
+        "requests24h": selected["requests"],
+        "fiveXx24h": selected["fiveXx"],
+        "range": range,
+        "requests": selected["requests"],
+        "fiveXx": selected["fiveXx"],
+        "errorRatePct": selected["errorRatePct"],
+        "p95LatencyMs": selected["p95LatencyMs"],
+        "topEndpoints": selected["topEndpoints"],
         "source": "placeholder",
+    }
+
+
+@router.get("/activity")
+def get_dashboard_activity():
+    """Placeholder activity stream payload for dashboard timeline shell."""
+    return {
+        "source": "placeholder",
+        "events": [
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "actor": "system",
+                "action": "key.rotate",
+                "status": "success",
+                "target": "key_live_primary",
+            },
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "actor": "owner@example.com",
+                "action": "key.create",
+                "status": "success",
+                "target": "Zapier sandbox",
+            },
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "actor": "system",
+                "action": "usage.alert",
+                "status": "info",
+                "target": "p95 latency spike",
+            },
+        ],
     }
 
 

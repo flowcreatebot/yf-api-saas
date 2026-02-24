@@ -1,6 +1,7 @@
 const SESSION_KEY = "yf_dashboard_session";
 const USER_KEY = "yf_dashboard_user";
 const KEYS_STATE_KEY = "yf_dashboard_keys_state";
+const METRICS_RANGE_KEY = "yf_dashboard_metrics_range";
 
 const defaultKeys = [
   {
@@ -55,6 +56,30 @@ function loadKeyState() {
 
 function saveKeyState(keys) {
   localStorage.setItem(KEYS_STATE_KEY, JSON.stringify(keys));
+}
+
+function getMetricsRange() {
+  const selected = localStorage.getItem(METRICS_RANGE_KEY);
+  if (selected === "7d" || selected === "30d") return selected;
+  return "24h";
+}
+
+function setMetricsRange(range) {
+  const selected = range === "7d" || range === "30d" ? range : "24h";
+  localStorage.setItem(METRICS_RANGE_KEY, selected);
+  return selected;
+}
+
+function rangeLabel(range) {
+  if (range === "7d") return "7d";
+  if (range === "30d") return "30d";
+  return "24h";
+}
+
+function setActiveMetricsRange(range) {
+  document.querySelectorAll("[data-range]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.range === range);
+  });
 }
 
 function setKeysFeedback(text, level = "info") {
@@ -223,8 +248,11 @@ function initUserText() {
   }
 }
 
-async function loadOverviewPayload() {
-  const response = await fetch("/internal/api/overview", { headers: { Accept: "application/json" } });
+async function loadOverviewPayload(range = "24h") {
+  const selected = range === "7d" || range === "30d" ? range : "24h";
+  const response = await fetch(`/internal/api/overview?range=${encodeURIComponent(selected)}`, {
+    headers: { Accept: "application/json" },
+  });
   if (!response.ok) {
     throw new Error(`overview request failed (${response.status})`);
   }
@@ -236,7 +264,7 @@ function renderOverview(payload) {
   const errorRateEl = document.getElementById("kpi-error-rate");
   const calloutEl = document.getElementById("overview-callout");
 
-  if (requestsEl) requestsEl.textContent = Number(payload.requests24h || 0).toLocaleString();
+  if (requestsEl) requestsEl.textContent = Number(payload.requests24h || payload.requests || 0).toLocaleString();
   if (errorRateEl) errorRateEl.textContent = `${Number(payload.errorRatePct || 0).toFixed(2)}%`;
   if (calloutEl) {
     calloutEl.textContent =
@@ -245,13 +273,18 @@ function renderOverview(payload) {
 }
 
 function renderMetrics(payload) {
+  const selectedRange = payload?.range || getMetricsRange();
   const p95El = document.getElementById("kpi-p95");
   const fiveXxEl = document.getElementById("kpi-5xx");
+  const fiveXxLabelEl = document.getElementById("kpi-5xx-label");
+  const requestsColLabelEl = document.getElementById("requests-col-label");
   const tableBody = document.getElementById("metrics-table-body");
   const calloutEl = document.getElementById("metrics-callout");
 
   if (p95El) p95El.textContent = `${Number(payload.p95LatencyMs || 0)} ms`;
-  if (fiveXxEl) fiveXxEl.textContent = Number(payload.fiveXx24h || 0).toLocaleString();
+  if (fiveXxEl) fiveXxEl.textContent = Number(payload.fiveXx ?? payload.fiveXx24h ?? 0).toLocaleString();
+  if (fiveXxLabelEl) fiveXxLabelEl.textContent = `5xx (${rangeLabel(selectedRange)})`;
+  if (requestsColLabelEl) requestsColLabelEl.textContent = `Requests (${rangeLabel(selectedRange)})`;
 
   if (tableBody && Array.isArray(payload.topEndpoints)) {
     tableBody.innerHTML = "";
@@ -269,8 +302,10 @@ function renderMetrics(payload) {
 
   if (calloutEl) {
     calloutEl.textContent =
-      "Metrics shown from placeholder internal API. Add per-tenant filtering and real charts after auth wiring.";
+      `Metrics shown from placeholder internal API (${rangeLabel(selectedRange)} range). Add per-tenant filtering and real charts after auth wiring.`;
   }
+
+  setActiveMetricsRange(selectedRange);
 }
 
 function renderMetricsError(error) {
@@ -283,6 +318,74 @@ function renderMetricsError(error) {
 
   if (calloutEl) {
     calloutEl.textContent = "Could not load placeholder metrics payload.";
+  }
+}
+
+async function selectMetricsRange(range) {
+  const selected = setMetricsRange(range);
+  setActiveMetricsRange(selected);
+  const tableBody = document.getElementById("metrics-table-body");
+  if (tableBody) {
+    tableBody.innerHTML = '<tr><td colspan="4" class="small">Loading placeholder endpoint metrics…</td></tr>';
+  }
+
+  try {
+    const payload = await loadOverviewPayload(selected);
+    renderMetrics(payload);
+  } catch (error) {
+    renderMetricsError(error);
+  }
+}
+
+async function loadActivityPayload() {
+  const response = await fetch("/internal/api/activity", { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    throw new Error(`activity request failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function activityBadge(status) {
+  if (status === "success") return '<span class="badge ok">success</span>';
+  if (status === "info") return '<span class="badge warn">info</span>';
+  return `<span class="badge">${status || "unknown"}</span>`;
+}
+
+function renderActivity(payload) {
+  const tableBody = document.getElementById("activity-table-body");
+  const calloutEl = document.getElementById("activity-callout");
+
+  if (tableBody && Array.isArray(payload.events)) {
+    tableBody.innerHTML = "";
+    payload.events.forEach((event) => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${new Date(event.timestamp).toLocaleString()}</td>
+        <td>${event.actor || "system"}</td>
+        <td>${event.action || "—"}</td>
+        <td>${activityBadge(event.status)}</td>
+        <td>${event.target || "—"}</td>
+      `;
+      tableBody.appendChild(row);
+    });
+  }
+
+  if (calloutEl) {
+    calloutEl.textContent =
+      "Loaded from /internal/api/activity placeholder feed. Wire audit source + filters in next milestone.";
+  }
+}
+
+function renderActivityError(error) {
+  const tableBody = document.getElementById("activity-table-body");
+  const calloutEl = document.getElementById("activity-callout");
+
+  if (tableBody) {
+    tableBody.innerHTML = `<tr><td colspan="5" class="small">Failed to load activity: ${error.message}</td></tr>`;
+  }
+
+  if (calloutEl) {
+    calloutEl.textContent = "Could not load placeholder activity payload.";
   }
 }
 
@@ -302,19 +405,28 @@ async function bootstrap(page) {
     attachHandlers();
   }
 
-  if (page === "overview" || page === "metrics") {
+  if (page === "overview") {
     try {
-      const payload = await loadOverviewPayload();
-      if (page === "overview") renderOverview(payload);
-      if (page === "metrics") renderMetrics(payload);
+      const payload = await loadOverviewPayload("24h");
+      renderOverview(payload);
+    } catch {
+      const calloutEl = document.getElementById("overview-callout");
+      if (calloutEl) calloutEl.textContent = "Could not load placeholder summary.";
+    }
+  }
+
+  if (page === "metrics") {
+    const selectedRange = getMetricsRange();
+    setActiveMetricsRange(selectedRange);
+    await selectMetricsRange(selectedRange);
+  }
+
+  if (page === "activity") {
+    try {
+      const payload = await loadActivityPayload();
+      renderActivity(payload);
     } catch (error) {
-      if (page === "metrics") {
-        renderMetricsError(error);
-      }
-      if (page === "overview") {
-        const calloutEl = document.getElementById("overview-callout");
-        if (calloutEl) calloutEl.textContent = "Could not load placeholder summary.";
-      }
+      renderActivityError(error);
     }
   }
 }
@@ -326,4 +438,5 @@ window.dashboardApp = {
   logoutPlaceholder,
   rotateKey,
   toggleKeyStatus,
+  selectMetricsRange,
 };

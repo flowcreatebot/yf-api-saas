@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
     stripe_price_id_monthly: str = Field(default="", alias="STRIPE_PRICE_ID_MONTHLY")
+    billing_allowed_redirect_hosts: str = Field(default="", alias="BILLING_ALLOWED_REDIRECT_HOSTS")
 
     database_url: str = Field(default="sqlite:///./dev.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
