@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: y-finance-api
+    runtime: docker
+    repo: https://github.com/flowcreatebot/yf-api-saas
+    branch: master
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /v1/health
+    envVars:
+      - key: APP_NAME
+        value: Y Finance API
+      - key: APP_ENV
+        value: production
+      - key: APP_BASE_URL
+        sync: false
+      - key: API_MASTER_KEY
+        generateValue: true
+      - key: API_VALID_KEYS
+        value: ""
+      - key: DATABASE_URL
+        fromDatabase:
+          name: y-finance-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: y-finance-redis
+          property: connectionString
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_ID_MONTHLY
+        sync: false
+
+  - type: redis
+    name: y-finance-redis
+    ipAllowList: []
+    plan: free
+
+databases:
+  - name: y-finance-db
+    plan: free
+    databaseName: yfinance
+    user: yfinance
