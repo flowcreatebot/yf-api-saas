@@ -7,10 +7,10 @@ Execute concrete shipping work on Y Finance API every run.
 - Main acts as coordinator and may use subagents for larger scoped work.
 - First read `PROJECT_YFINANCE_SAAS_PLAN.md` for big-picture direction.
 - Stability limits for cron runs:
-  - Spawn **max 1 subagent per cycle**.
-  - Run subagent work **sequentially** (never fan out multiple subagents in one cycle).
-  - Use subagents only for tasks likely to exceed 10 minutes if done directly.
-- For the immediate dashboard focus, prefer a single `builder` subagent to deliver one vertical slice per cycle.
+  - Spawn **exactly 1 `builder` subagent per cycle** while dashboard v1 is in progress.
+  - Never fan out multiple subagents in one cycle.
+  - Run subagent work sequentially only.
+- For immediate focus, the `builder` subagent should deliver one user-facing dashboard vertical slice per cycle.
 - Keep scope tight: one concrete milestone per run.
 
 ## Thinking policy (explicit)
