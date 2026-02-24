@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API Keys · Y Finance Dashboard</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body data-page="keys">
+    <main class="container">
+      <div class="layout">
+        <aside class="sidebar">
+          <div class="brand">YF API · Internal</div>
+          <a class="btn nav-btn" data-nav="overview" href="./app.html">Overview</a>
+          <a class="btn nav-btn" data-nav="keys" href="./keys.html">API Keys</a>
+          <a class="btn nav-btn" data-nav="metrics" href="./metrics.html">Usage & Metrics</a>
+          <hr style="border-color: var(--border); margin: 14px 0;" />
+          <button class="btn" onclick="dashboardApp.logoutPlaceholder()">Sign out</button>
+          <p class="small" style="margin-top: 10px;">Auth is placeholder-only in v0.</p>
+        </aside>
+
+        <section>
+          <article class="card">
+            <div class="topbar">
+              <h2>API Key Management</h2>
+              <span class="badge warn" id="keys-mode-badge">mock-store API</span>
+            </div>
+            <p>Lifecycle actions use internal mock endpoints (create/rotate/revoke/activate).</p>
+
+            <form id="create-key-form" class="inline-form">
+              <input id="key-label" type="text" required placeholder="Key label (e.g. Production backend)" />
+              <select id="key-env" required>
+                <option value="live">Live</option>
+                <option value="test">Test</option>
+              </select>
+              <button class="btn primary" id="create-key-button" type="submit">Create key</button>
+            </form>
+
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>Prefix</th>
+                  <th>Status</th>
+                  <th>Last used</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keys-table-body"></tbody>
+            </table>
+
+            <div class="callout" id="keys-feedback">No secrets are shown in this shell. Prefixes are masked placeholders only.</div>
+          </article>
+        </section>
+      </div>
+    </main>
+
+    <script src="./assets/app.js"></script>
+    <script>
+      window.dashboardApp.bootstrap("keys");
+    </script>
+  </body>
+</html>

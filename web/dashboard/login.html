@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login · Y Finance Dashboard</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <main class="container" style="max-width: 560px; padding-top: 10vh;">
+      <section class="card">
+        <h1>Y Finance Dashboard (v0 shell)</h1>
+        <p>
+          Placeholder login gate for the internal dashboard. Replace with real auth
+          (JWT/session/SSO) in the next milestone.
+        </p>
+
+        <form id="login-form">
+          <div class="form-row">
+            <label for="email" class="small">Work email</label>
+            <input id="email" type="email" required placeholder="owner@company.com" />
+          </div>
+          <div class="form-row">
+            <label for="password" class="small">Password (placeholder)</label>
+            <input id="password" type="password" required placeholder="••••••••" />
+          </div>
+          <button class="btn primary" type="submit">Sign in</button>
+        </form>
+
+        <div class="callout">
+          <strong>Current behavior:</strong> localStorage-only session flag. No backend auth call yet.
+        </div>
+      </section>
+    </main>
+
+    <script src="./assets/app.js"></script>
+    <script>
+      if (localStorage.getItem("yf_dashboard_session") === "1") {
+        window.location.replace("./app.html");
+      }
+
+      const form = document.getElementById("login-form");
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const email = document.getElementById("email").value;
+        window.dashboardApp.loginPlaceholder(email);
+        window.location.href = "./app.html";
+      });
+    </script>
+  </body>
+</html>

@@ -1,10 +1,16 @@
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .routes.market import router as market_router
 from .routes.billing import router as billing_router
+from .routes.internal_dashboard import router as internal_dashboard_router
 
 app = FastAPI(
     title=settings.app_name,
@@ -22,8 +28,35 @@ app.add_middleware(
 
 app.include_router(market_router)
 app.include_router(billing_router)
+app.include_router(internal_dashboard_router)
+
+DASHBOARD_DIR = Path(__file__).resolve().parents[1] / "web" / "dashboard"
+if DASHBOARD_DIR.exists():
+    app.mount(
+        "/internal/dashboard",
+        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
+        name="internal-dashboard",
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Validation failed",
+            "errors": jsonable_encoder(exc.errors()),
+        },
+    )
 
 
 @app.get("/", include_in_schema=False)
 def root():
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/internal", include_in_schema=False)
+def internal_root():
+    if DASHBOARD_DIR.exists():
+        return RedirectResponse(url="/internal/dashboard/")
     return RedirectResponse(url="/docs")
