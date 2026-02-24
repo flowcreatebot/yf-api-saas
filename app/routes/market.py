@@ -1,15 +1,64 @@
 from datetime import date
 import re
+import threading
+import time
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 import yfinance as yf
 
 from ..auth import require_api_key
+from ..config import settings
 
 router = APIRouter(prefix="/v1", tags=["market"])
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
 ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
 ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
+
+
+class _InMemoryTTLCache:
+    def __init__(self, ttl_seconds: int, stale_window_seconds: int):
+        self.ttl_seconds = max(1, int(ttl_seconds))
+        self.stale_window_seconds = max(self.ttl_seconds, int(stale_window_seconds))
+        self._items: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    def get_fresh(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self._items.get(key)
+        if item is None:
+            return None
+
+        fetched_at, payload = item
+        if (time.time() - fetched_at) <= self.ttl_seconds:
+            return payload
+        return None
+
+    def get_stale(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self._items.get(key)
+        if item is None:
+            return None
+
+        fetched_at, payload = item
+        if (time.time() - fetched_at) <= self.stale_window_seconds:
+            return payload
+        return None
+
+    def set(self, key: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._items[key] = (time.time(), payload)
+
+
+_market_cache = _InMemoryTTLCache(
+    ttl_seconds=settings.market_cache_ttl_seconds,
+    stale_window_seconds=settings.market_cache_stale_window_seconds,
+)
+
+
+def _cache_key(endpoint: str, symbol: str) -> str:
+    return f"{endpoint}:{symbol}"
 
 
 def _normalize_symbol(raw_symbol: str) -> str:
@@ -27,16 +76,25 @@ def health():
 @router.get("/quote/{symbol}")
 def quote(symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
+    key = _cache_key("quote", symbol)
+
+    cached = _market_cache.get_fresh(key)
+    if cached is not None:
+        return {**cached, "stale": False}
+
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info or {}
     except Exception as exc:
+        stale = _market_cache.get_stale(key)
+        if stale is not None:
+            return {**stale, "stale": True}
         raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
 
     if not info:
         raise HTTPException(status_code=404, detail="Symbol not found or unavailable")
 
-    return {
+    payload = {
         "symbol": symbol.upper(),
         "currency": info.get("currency"),
         "exchange": info.get("exchange"),
@@ -48,6 +106,8 @@ def quote(symbol: str, _: str = Depends(require_api_key)):
         "volume": info.get("lastVolume"),
         "market_cap": info.get("marketCap"),
     }
+    _market_cache.set(key, payload)
+    return {**payload, "stale": False}
 
 
 @router.get("/history/{symbol}")
@@ -116,31 +176,40 @@ def quotes(
 
     results = []
     for symbol in normalized_symbols:
+        key = _cache_key("quote", symbol)
+        cached = _market_cache.get_fresh(key)
+        if cached is not None:
+            results.append({**cached, "ok": True, "stale": False})
+            continue
+
         try:
             ticker = yf.Ticker(symbol)
             info = ticker.fast_info or {}
         except Exception:
-            results.append({"symbol": symbol, "ok": False, "error": "upstream_error"})
+            stale = _market_cache.get_stale(key)
+            if stale is not None:
+                results.append({**stale, "ok": True, "stale": True})
+            else:
+                results.append({"symbol": symbol, "ok": False, "error": "upstream_error"})
             continue
 
         if not info:
             results.append({"symbol": symbol, "ok": False, "error": "unavailable"})
             continue
 
-        results.append(
-            {
-                "symbol": symbol,
-                "ok": True,
-                "currency": info.get("currency"),
-                "last_price": info.get("lastPrice"),
-                "open": info.get("open"),
-                "day_high": info.get("dayHigh"),
-                "day_low": info.get("dayLow"),
-                "previous_close": info.get("previousClose"),
-                "volume": info.get("lastVolume"),
-                "market_cap": info.get("marketCap"),
-            }
-        )
+        payload = {
+            "symbol": symbol,
+            "currency": info.get("currency"),
+            "last_price": info.get("lastPrice"),
+            "open": info.get("open"),
+            "day_high": info.get("dayHigh"),
+            "day_low": info.get("dayLow"),
+            "previous_close": info.get("previousClose"),
+            "volume": info.get("lastVolume"),
+            "market_cap": info.get("marketCap"),
+        }
+        _market_cache.set(key, payload)
+        results.append({**payload, "ok": True, "stale": False})
 
     return {"count": len(results), "data": results}
 
@@ -148,16 +217,25 @@ def quotes(
 @router.get("/fundamentals/{symbol}")
 def fundamentals(symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
+    key = _cache_key("fundamentals", symbol)
+
+    cached = _market_cache.get_fresh(key)
+    if cached is not None:
+        return {**cached, "stale": False}
+
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info or {}
     except Exception as exc:
+        stale = _market_cache.get_stale(key)
+        if stale is not None:
+            return {**stale, "stale": True}
         raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
 
     if not info:
         raise HTTPException(status_code=404, detail="Fundamentals unavailable")
 
-    return {
+    payload = {
         "symbol": symbol.upper(),
         "long_name": info.get("longName"),
         "sector": info.get("sector"),
@@ -171,3 +249,5 @@ def fundamentals(symbol: str, _: str = Depends(require_api_key)):
         "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
         "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
     }
+    _market_cache.set(key, payload)
+    return {**payload, "stale": False}
