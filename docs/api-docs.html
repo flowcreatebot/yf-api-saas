@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FlowCreate Finance API Docs</title>
+  <meta name="description" content="Customer-facing API documentation for FlowCreate Finance API." />
+  <style>
+    body { font-family: Inter, Arial, sans-serif; margin: 0; background:#0b1020; color:#eaf1ff; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 60px; }
+    h1,h2,h3 { color:#fff; }
+    p, li { color:#c5d1f0; line-height: 1.6; }
+    .muted { color:#8ea1d8; }
+    .card { background:#111936; border:1px solid #26346b; border-radius:12px; padding:18px; margin:14px 0; }
+    code { background:#1a2450; color:#dfe6ff; padding:2px 6px; border-radius:6px; }
+    pre { background:#0d1531; border:1px solid #27356d; border-radius:10px; padding:12px; overflow:auto; color:#dfe6ff; }
+    a { color:#9db2ff; }
+    .topnav { margin-bottom:20px; }
+    .btn { text-decoration:none; border:1px solid #3a4fa3; color:#d9e1ff; padding:8px 12px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topnav"><a class="btn" href="./">← Back to landing</a></div>
+    <h1>FlowCreate Finance API — Customer Docs</h1>
+    <p class="muted">For Zapier, Make, n8n, and custom HTTP modules.</p>
+
+    <div class="card">
+      <h2>Base URL</h2>
+      <p>Use your deployed API domain (example): <code>https://api.flowcreate.ai</code></p>
+    </div>
+
+    <div class="card">
+      <h2>Authentication</h2>
+      <p>Send your API key in the header:</p>
+      <pre><code>x-api-key: YOUR_API_KEY</code></pre>
+    </div>
+
+    <h2>Endpoints</h2>
+
+    <div class="card">
+      <h3>GET <code>/v1/health</code></h3>
+      <p>Health check endpoint.</p>
+    </div>
+
+    <div class="card">
+      <h3>GET <code>/v1/quote/{symbol}</code></h3>
+      <p>Current quote snapshot for one ticker.</p>
+      <pre><code>curl -H "x-api-key: $API_KEY" https://api.flowcreate.ai/v1/quote/AAPL</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>GET <code>/v1/history/{symbol}</code></h3>
+      <p>Historical OHLCV candles.</p>
+      <p>Query params: <code>period</code> (default <code>1mo</code>), <code>interval</code> (default <code>1d</code>), optional <code>start</code>/<code>end</code> (<code>YYYY-MM-DD</code>).</p>
+      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.flowcreate.ai/v1/history/TSLA?period=3mo&interval=1d"</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>GET <code>/v1/quotes?symbols=AAPL,MSFT,TSLA</code></h3>
+      <p>Batch quote fetch. Maximum 25 symbols per request.</p>
+      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.flowcreate.ai/v1/quotes?symbols=AAPL,MSFT,TSLA"</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>GET <code>/v1/fundamentals/{symbol}</code></h3>
+      <p>Company metadata and key valuation fields.</p>
+      <pre><code>curl -H "x-api-key: $API_KEY" https://api.flowcreate.ai/v1/fundamentals/MSFT</code></pre>
+    </div>
+
+    <h2>Billing Endpoints</h2>
+    <div class="card">
+      <h3>GET <code>/v1/billing/plans</code></h3>
+      <p>Returns available plans.</p>
+      <h3>POST <code>/v1/billing/webhook/stripe</code></h3>
+      <p>Stripe webhook receiver (server-to-server).</p>
+    </div>
+
+    <h2>No-Code Setup Pattern</h2>
+    <ol>
+      <li>Create HTTP request module in Zapier/Make/n8n.</li>
+      <li>Add <code>x-api-key</code> header.</li>
+      <li>Call quote/history/fundamentals endpoint.</li>
+      <li>Map JSON fields into downstream actions.</li>
+    </ol>
+  </div>
+</body>
+</html>
