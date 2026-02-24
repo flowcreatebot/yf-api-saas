@@ -6,11 +6,14 @@ Execute concrete shipping work on Y Finance API every run.
 ## Execution mode
 - Main acts as coordinator and may use subagents for larger scoped work.
 - First read `PROJECT_YFINANCE_SAAS_PLAN.md` for big-picture direction.
-- Stability limits for cron runs:
-  - Spawn **exactly 1 `builder` subagent per cycle** while dashboard v1 is in progress.
-  - Never fan out multiple subagents in one cycle.
-  - Run subagent work sequentially only.
-- For immediate focus, the `builder` subagent should deliver one user-facing dashboard vertical slice per cycle.
+- Stability limits for cron runs (parallel-safe mode):
+  - Spawn **max 2 subagents in parallel** per cycle.
+  - Allowed parallel pair during dashboard push:
+    - `builder` (implementation)
+    - plus exactly one of `qa` (test hardening) or `docs` (user docs)
+  - Never spawn more than 2 subagents in the same cycle.
+  - If a blocker appears, stop further spawns and report blocker.
+- For immediate focus, every cycle must include one `builder` subagent delivering a user-facing dashboard vertical slice.
 - Keep scope tight: one concrete milestone per run.
 
 ## Thinking policy (explicit)
@@ -40,7 +43,8 @@ Prefer execution over long analysis loops.
 - Keep comms concise; no routine spam.
 - No destructive actions without explicit approval.
 - Never leak secrets.
-- Target a runtime budget of <15 minutes; if work will exceed that, checkpoint and continue next cycle.
+- Target a runtime budget of <35 minutes even with parallel subagents; if work will exceed that, checkpoint and continue next cycle.
+- Main must post a single consolidated milestone/blocker update (avoid noisy per-step chatter).
 
 ## Update policy
 Post an update only when:
