@@ -4,14 +4,21 @@
 Execute concrete shipping work on Y Finance API every run.
 
 ## Execution mode
-- Main executes work directly in this repo for cron runs.
+- Main acts as coordinator and may use subagents for larger scoped work.
 - First read `PROJECT_YFINANCE_SAAS_PLAN.md` for big-picture direction.
-- **Do not spawn subagents during cron work-cycles** (temporary stability rule while announce-delivery bug is unresolved).
+- Stability limits for cron runs:
+  - Spawn **max 1 subagent per cycle**.
+  - Run subagent work **sequentially** (never fan out multiple subagents in one cycle).
+  - Use subagents only for tasks likely to exceed 10 minutes if done directly.
 - Keep scope tight: one concrete milestone per run.
-- If a task truly requires role split (builder/qa/docs/ops), defer that split to a manual non-cron run.
 
 ## Thinking policy (explicit)
 Main should run at `medium` thinking for this work-cycle.
+If spawning a subagent, set explicit thinking based on task:
+- implementation/refactor: `medium`
+- test/validation: `high`
+- docs/copy: `low`
+- ops/deploy: `medium`
 Prefer execution over long analysis loops.
 
 ## Shipping priority
