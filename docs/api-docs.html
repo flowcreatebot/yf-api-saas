@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FlowCreate Finance API Docs</title>
-  <meta name="description" content="Customer-facing API documentation for FlowCreate Finance API." />
+  <title>Y Finance API Docs</title>
+  <meta name="description" content="Customer-facing API documentation for Y Finance API." />
   <style>
     body { font-family: Inter, Arial, sans-serif; margin: 0; background:#0b1020; color:#eaf1ff; }
     .wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 60px; }
@@ -22,12 +22,12 @@
 <body>
   <div class="wrap">
     <div class="topnav"><a class="btn" href="./">← Back to landing</a></div>
-    <h1>FlowCreate Finance API — Customer Docs</h1>
+    <h1>Y Finance API — Customer Docs</h1>
     <p class="muted">For Zapier, Make, n8n, and custom HTTP modules.</p>
 
     <div class="card">
       <h2>Base URL</h2>
-      <p>Use your deployed API domain (example): <code>https://api.flowcreate.ai</code></p>
+      <p>Use your deployed API domain (example): <code>https://api.yfinanceapi.com</code></p>
     </div>
 
     <div class="card">
@@ -46,26 +46,26 @@
     <div class="card">
       <h3>GET <code>/v1/quote/{symbol}</code></h3>
       <p>Current quote snapshot for one ticker.</p>
-      <pre><code>curl -H "x-api-key: $API_KEY" https://api.flowcreate.ai/v1/quote/AAPL</code></pre>
+      <pre><code>curl -H "x-api-key: $API_KEY" https://api.yfinanceapi.com/v1/quote/AAPL</code></pre>
     </div>
 
     <div class="card">
       <h3>GET <code>/v1/history/{symbol}</code></h3>
       <p>Historical OHLCV candles.</p>
       <p>Query params: <code>period</code> (default <code>1mo</code>), <code>interval</code> (default <code>1d</code>), optional <code>start</code>/<code>end</code> (<code>YYYY-MM-DD</code>).</p>
-      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.flowcreate.ai/v1/history/TSLA?period=3mo&interval=1d"</code></pre>
+      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.yfinanceapi.com/v1/history/TSLA?period=3mo&interval=1d"</code></pre>
     </div>
 
     <div class="card">
       <h3>GET <code>/v1/quotes?symbols=AAPL,MSFT,TSLA</code></h3>
       <p>Batch quote fetch. Maximum 25 symbols per request.</p>
-      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.flowcreate.ai/v1/quotes?symbols=AAPL,MSFT,TSLA"</code></pre>
+      <pre><code>curl -H "x-api-key: $API_KEY" "https://api.yfinanceapi.com/v1/quotes?symbols=AAPL,MSFT,TSLA"</code></pre>
     </div>
 
     <div class="card">
       <h3>GET <code>/v1/fundamentals/{symbol}</code></h3>
       <p>Company metadata and key valuation fields.</p>
-      <pre><code>curl -H "x-api-key: $API_KEY" https://api.flowcreate.ai/v1/fundamentals/MSFT</code></pre>
+      <pre><code>curl -H "x-api-key: $API_KEY" https://api.yfinanceapi.com/v1/fundamentals/MSFT</code></pre>
     </div>
 
     <h2>Billing Endpoints</h2>
