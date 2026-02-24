@@ -26,11 +26,12 @@ If spawning a subagent, set explicit thinking based on task:
 Prefer execution over long analysis loops.
 
 ## Shipping priority
-1. **Immediate focus (until first milestone lands): Internal dashboard v0 scaffold**
-   - create dashboard app skeleton under `web/`
-   - add auth gate placeholder/login shell
-   - add API key management page shell
-   - add usage/metrics page shell
+1. **Immediate focus: React dashboard migration (v1 UX)**
+   - scaffold React app for dashboard (keep existing static shell working until cutover)
+   - implement modern minimal UI system (layout/nav/cards/tables/forms)
+   - migrate existing pages: overview, API keys, metrics, activity
+   - wire existing internal placeholder APIs (`/internal/api/overview`, `/internal/api/keys`, `/internal/api/activity`)
+   - document local/dev serve + production mount plan
 2. API correctness + stability
 3. Auth/billing safety
 4. Customer docs quality
