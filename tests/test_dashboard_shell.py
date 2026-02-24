@@ -17,27 +17,33 @@ def test_dashboard_shell_served():
     assert 'Y Finance Dashboard' in r.text
 
 
-def test_dashboard_login_shell_served():
-    r = client.get('/internal/dashboard/login.html')
+def test_dashboard_asset_served():
+    r = client.get('/internal/dashboard/assets/app.js')
+    assert r.status_code == 200
+    assert 'createRoot' in r.text
+
+
+def test_dashboard_legacy_login_shell_served():
+    r = client.get('/internal/dashboard-legacy/login.html')
     assert r.status_code == 200
     assert 'Placeholder login gate' in r.text
 
 
-def test_dashboard_keys_shell_served():
-    r = client.get('/internal/dashboard/keys.html')
+def test_dashboard_legacy_keys_shell_served():
+    r = client.get('/internal/dashboard-legacy/keys.html')
     assert r.status_code == 200
     assert 'API Key Management' in r.text
     assert 'id="keys-feedback"' in r.text
 
 
-def test_dashboard_metrics_shell_served():
-    r = client.get('/internal/dashboard/metrics.html')
+def test_dashboard_legacy_metrics_shell_served():
+    r = client.get('/internal/dashboard-legacy/metrics.html')
     assert r.status_code == 200
     assert 'Usage & Metrics' in r.text
 
 
-def test_dashboard_activity_shell_served():
-    r = client.get('/internal/dashboard/activity.html')
+def test_dashboard_legacy_activity_shell_served():
+    r = client.get('/internal/dashboard-legacy/activity.html')
     assert r.status_code == 200
     assert 'Recent Activity' in r.text
 

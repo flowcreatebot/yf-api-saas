@@ -80,21 +80,20 @@ cp .env.example .env
 docker compose up --build
 ```
 
-## Internal dashboard v0 shell
+## Internal dashboard
 
-Static scaffold is under `web/dashboard/` with:
-- login/auth gate placeholder (`login.html`)
-- API key management shell with local mock lifecycle actions (create/rotate/revoke)
-- usage/metrics shell (`metrics.html`) with time-range filters (24h / 7d / 30d)
-- placeholder dashboard APIs: `/internal/api/overview` (supports `?range=24h|7d|30d`) and `/internal/api/keys`
+Dashboard routes during migration:
 
-Serve locally (example):
+- Primary dashboard: `/internal/dashboard/`
+- Legacy compatibility shell: `/internal/dashboard-legacy/`
 
-```bash
-cd web/dashboard
-python3 -m http.server 8080
-# open http://localhost:8080
-```
+Current dashboard includes:
+- Overview wired to `/internal/api/overview?range=24h|7d|30d`
+- API Keys wired to `/internal/api/keys` + create/rotate/revoke/activate
+- Activity wired to `/internal/api/activity`
+- Metrics placeholder page
+
+See `docs/DASHBOARD_REACT.md` for local/dev + migration mount plan.
 
 ## Legal note
 

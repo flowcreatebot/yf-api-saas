@@ -31,11 +31,20 @@ app.include_router(billing_router)
 app.include_router(internal_dashboard_router)
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[1] / "web" / "dashboard"
-if DASHBOARD_DIR.exists():
+DASHBOARD_V2_DIR = Path(__file__).resolve().parents[1] / "web" / "dashboard-react"
+
+if DASHBOARD_V2_DIR.exists():
     app.mount(
         "/internal/dashboard",
-        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
+        StaticFiles(directory=str(DASHBOARD_V2_DIR), html=True),
         name="internal-dashboard",
+    )
+
+if DASHBOARD_DIR.exists():
+    app.mount(
+        "/internal/dashboard-legacy",
+        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
+        name="internal-dashboard-legacy",
     )
 
 
@@ -57,6 +66,8 @@ def root():
 
 @app.get("/internal", include_in_schema=False)
 def internal_root():
-    if DASHBOARD_DIR.exists():
+    if DASHBOARD_V2_DIR.exists():
         return RedirectResponse(url="/internal/dashboard/")
+    if DASHBOARD_DIR.exists():
+        return RedirectResponse(url="/internal/dashboard-legacy/")
     return RedirectResponse(url="/docs")
