@@ -54,6 +54,46 @@ def test_webhook_requires_secret_configured():
     assert r.status_code in (400, 503)
 
 
+def test_webhook_requires_signature_when_secret_enabled(monkeypatch):
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+    r = client.post('/v1/billing/webhook/stripe', data='{}')
+    assert r.status_code == 400
+
+
+def test_webhook_supported_event_is_marked_handled(monkeypatch):
+    import app.routes.billing as billing
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {'type': 'invoice.payment_succeeded'}
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    r = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert r.status_code == 200
+    assert r.json()['handled'] is True
+
+
+def test_webhook_unknown_event_is_unhandled(monkeypatch):
+    import app.routes.billing as billing
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {'type': 'charge.refunded'}
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    r = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert r.status_code == 200
+    assert r.json()['handled'] is False
+
+
 def test_checkout_rejects_insecure_redirect_urls(monkeypatch):
     monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
     monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')

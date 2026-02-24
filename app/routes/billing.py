@@ -68,6 +68,8 @@ def create_checkout_session(payload: CheckoutSessionRequest):
 async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None, alias="Stripe-Signature")):
     if not settings.stripe_webhook_secret:
         raise HTTPException(status_code=503, detail="Stripe webhook secret not configured")
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
 
     payload = await request.body()
 
@@ -76,5 +78,8 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid webhook: {exc}")
 
-    # TODO: Handle customer.subscription.* and invoice.payment_* events
-    return {"received": True, "type": event.get("type")}
+    event_type = event.get("type", "")
+    supported_prefixes = ("customer.subscription.", "invoice.payment_")
+    handled = event_type.startswith(supported_prefixes)
+
+    return {"received": True, "type": event_type, "handled": handled}
