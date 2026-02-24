@@ -8,6 +8,8 @@ from ..auth import require_api_key
 router = APIRouter(prefix="/v1", tags=["market"])
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
+ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
+ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
 
 
 def _normalize_symbol(raw_symbol: str) -> str:
@@ -58,6 +60,16 @@ def history(
     _: str = Depends(require_api_key),
 ):
     symbol = _normalize_symbol(symbol)
+    period = period.strip().lower()
+    interval = interval.strip().lower()
+
+    if period not in ALLOWED_PERIODS:
+        raise HTTPException(status_code=400, detail="Invalid period")
+    if interval not in ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail="Invalid interval")
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=400, detail="start must be <= end")
+
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval, start=start, end=end, auto_adjust=False)
