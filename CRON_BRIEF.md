@@ -10,6 +10,7 @@ Execute concrete shipping work on Y Finance API every run.
   - Spawn **max 1 subagent per cycle**.
   - Run subagent work **sequentially** (never fan out multiple subagents in one cycle).
   - Use subagents only for tasks likely to exceed 10 minutes if done directly.
+- For the immediate dashboard focus, prefer a single `builder` subagent to deliver one vertical slice per cycle.
 - Keep scope tight: one concrete milestone per run.
 
 ## Thinking policy (explicit)
@@ -22,12 +23,16 @@ If spawning a subagent, set explicit thinking based on task:
 Prefer execution over long analysis loops.
 
 ## Shipping priority
-1. API correctness + stability
-2. Auth/billing safety
-3. Customer docs quality
-4. Deployment + reliability
-5. Conversion improvements on landing/customer journey
-6. Internal dashboard + API key self-serve portal
+1. **Immediate focus (until first milestone lands): Internal dashboard v0 scaffold**
+   - create dashboard app skeleton under `web/`
+   - add auth gate placeholder/login shell
+   - add API key management page shell
+   - add usage/metrics page shell
+2. API correctness + stability
+3. Auth/billing safety
+4. Customer docs quality
+5. Deployment + reliability
+6. Conversion improvements on landing/customer journey
 
 ## Operating rules
 - Make real progress each run (code/docs/tests/deploy steps), not just reporting.
