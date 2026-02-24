@@ -13,6 +13,15 @@ Execute concrete shipping work on Y Finance API every run.
   - `ops`: deployment hardening/infra/runbooks only (no product feature changes)
 - Subagents must stay in their lane; if a task crosses lanes, return to `main` for re-assignment.
 
+## Thinking policy (explicit)
+When spawning subagents, always set explicit thinking levels:
+- `builder` → `medium`
+- `qa` → `high`
+- `docs` → `low`
+- `ops` → `medium`
+
+Main coordinator should run at `medium` thinking for this work-cycle.
+
 ## Shipping priority
 1. API correctness + stability
 2. Auth/billing safety
