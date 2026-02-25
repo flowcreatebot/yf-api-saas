@@ -3,11 +3,12 @@ import math
 import re
 import threading
 import time
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import yfinance as yf
 
 from ..auth import require_api_key
 from ..config import settings
+from ..rate_limit import default_market_rate_limit, limiter
 
 router = APIRouter(prefix="/v1", tags=["market"])
 
@@ -80,7 +81,8 @@ def health():
 
 
 @router.get("/quote/{symbol}")
-def quote(symbol: str, _: str = Depends(require_api_key)):
+@limiter.limit(default_market_rate_limit)
+def quote(request: Request, symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
     cache_key = f"quote:{symbol}"
 
@@ -120,7 +122,9 @@ def quote(symbol: str, _: str = Depends(require_api_key)):
 
 
 @router.get("/history/{symbol}")
+@limiter.limit(default_market_rate_limit)
 def history(
+    request: Request,
     symbol: str,
     period: str = Query(default="1mo", description="e.g. 1d, 5d, 1mo, 3mo, 1y, 5y, max"),
     interval: str = Query(default="1d", description="e.g. 1m, 5m, 1h, 1d, 1wk"),
@@ -171,7 +175,9 @@ def history(
 
 
 @router.get("/quotes")
+@limiter.limit(default_market_rate_limit)
 def quotes(
+    request: Request,
     symbols: str = Query(..., description="Comma-separated symbols, e.g. AAPL,MSFT,TSLA"),
     _: str = Depends(require_api_key),
 ):
@@ -228,7 +234,8 @@ def quotes(
 
 
 @router.get("/fundamentals/{symbol}")
-def fundamentals(symbol: str, _: str = Depends(require_api_key)):
+@limiter.limit(default_market_rate_limit)
+def fundamentals(request: Request, symbol: str, _: str = Depends(require_api_key)):
     symbol = _normalize_symbol(symbol)
     cache_key = f"fundamentals:{symbol}"
     try:

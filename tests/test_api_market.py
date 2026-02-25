@@ -4,8 +4,12 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.config import settings
+from app.db import SessionLocal
+from app.main import app
+from app.models import APIKey, UsageLog
+from app.rate_limit import limiter
+from app.security import hash_api_key
 
 
 client = TestClient(app)
@@ -158,6 +162,22 @@ class InfoGetExplodesTicker:
 
 def _auth_headers():
     return {'x-api-key': settings.api_master_key}
+
+
+def _reset_rate_limiter_storage():
+    storage = limiter.limiter.storage
+    for method_name in ("reset", "clear"):
+        method = getattr(storage, method_name, None)
+        if callable(method):
+            method()
+            return
+
+
+def _master_api_key_id() -> int:
+    with SessionLocal() as db:
+        row = db.query(APIKey).filter(APIKey.key_hash == hash_api_key(settings.api_master_key)).first()
+        assert row is not None
+        return row.id
 
 
 def test_quote_ok(monkeypatch):
@@ -340,3 +360,49 @@ def test_quotes_field_read_failure_maps_to_upstream_error(monkeypatch):
     body = r.json()
     assert body['count'] == 2
     assert all(item['ok'] is False and item['error'] == 'upstream_error' for item in body['data'])
+
+
+def test_market_rate_limit_returns_429(monkeypatch):
+    import app.routes.market as market
+
+    _reset_rate_limiter_storage()
+    monkeypatch.setattr(settings, 'default_rate_limit', '2/minute')
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    first = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    second = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    third = client.get('/v1/quote/AAPL', headers=_auth_headers())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+
+
+def test_rate_limited_market_calls_still_write_usage_logs(monkeypatch):
+    import app.routes.market as market
+
+    _reset_rate_limiter_storage()
+    monkeypatch.setattr(settings, 'default_rate_limit', '1/minute')
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    api_key_id = _master_api_key_id()
+    with SessionLocal() as db:
+        before_max_id = db.query(UsageLog.id).filter(UsageLog.api_key_id == api_key_id).order_by(UsageLog.id.desc()).limit(1).scalar() or 0
+
+    allowed = client.get('/v1/quote/MSFT', headers=_auth_headers())
+    limited = client.get('/v1/quote/MSFT', headers=_auth_headers())
+
+    assert allowed.status_code == 200
+    assert limited.status_code == 429
+
+    with SessionLocal() as db:
+        new_rows = (
+            db.query(UsageLog)
+            .filter(UsageLog.api_key_id == api_key_id, UsageLog.id > before_max_id)
+            .order_by(UsageLog.id.asc())
+            .all()
+        )
+
+    assert len(new_rows) == 2
+    assert [row.status_code for row in new_rows] == [200, 429]
+    assert all(row.endpoint == '/v1/quote/{symbol}' for row in new_rows)

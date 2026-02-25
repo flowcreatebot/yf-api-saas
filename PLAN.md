@@ -120,7 +120,7 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ## Phase 6: Rate limiting + usage tracking
 
-**Status: IN PROGRESS**
+**Status: COMPLETE**
 
 ### Work
 
@@ -130,15 +130,15 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ### Done when
 
-- [ ] Hitting rate limit returns 429
-- [ ] Every API call creates a UsageLog record
-- [ ] Usage shows up in dashboard within reasonable delay
+- [x] Hitting rate limit returns 429
+- [x] Every API call creates a UsageLog record
+- [x] Usage shows up in dashboard within reasonable delay
 
 ---
 
 ## Phase 7: E2E testing
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ### Work
 

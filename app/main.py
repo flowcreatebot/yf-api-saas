@@ -7,10 +7,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from .config import settings
 from .db import SessionLocal, initialize_database, sync_configured_api_keys, verify_database_connection
 from .models import UsageLog
+from .rate_limit import limiter
 from .routes.billing import router as billing_router
 from .routes.customer_dashboard import router as customer_dashboard_router
 from .routes.market import router as market_router
@@ -22,6 +26,10 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
