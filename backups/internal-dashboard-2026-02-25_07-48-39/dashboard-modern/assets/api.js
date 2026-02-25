@@ -1,20 +1,26 @@
+function dashboardApiBase() {
+  const path = window.location.pathname || "";
+  if (path.startsWith("/dashboard")) return "/dashboard/api";
+  return "/internal/api";
+}
+
 export async function getOverview(range) {
-  const response = await fetch(`/internal/api/overview?range=${encodeURIComponent(range)}`);
+  const response = await fetch(`${dashboardApiBase()}/overview?range=${encodeURIComponent(range)}`);
   return handleJson(response);
 }
 
 export async function getMetrics(range) {
-  const response = await fetch(`/internal/api/metrics?range=${encodeURIComponent(range)}`);
+  const response = await fetch(`${dashboardApiBase()}/metrics?range=${encodeURIComponent(range)}`);
   return handleJson(response);
 }
 
 export async function getKeys() {
-  const response = await fetch("/internal/api/keys");
+  const response = await fetch(`${dashboardApiBase()}/keys`);
   return handleJson(response);
 }
 
 export async function createKey(label, env) {
-  const response = await fetch("/internal/api/keys/create", {
+  const response = await fetch(`${dashboardApiBase()}/keys/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, env }),
@@ -23,7 +29,7 @@ export async function createKey(label, env) {
 }
 
 export async function keyAction(id, action) {
-  const response = await fetch(`/internal/api/keys/${encodeURIComponent(id)}/${action}`, {
+  const response = await fetch(`${dashboardApiBase()}/keys/${encodeURIComponent(id)}/${action}`, {
     method: "POST",
   });
   return handleJson(response);
@@ -37,7 +43,7 @@ export async function getActivity(filters = {}) {
   if (filters.limit != null && filters.limit !== "") params.set("limit", String(filters.limit));
 
   const query = params.toString();
-  const response = await fetch(`/internal/api/activity${query ? `?${query}` : ""}`);
+  const response = await fetch(`${dashboardApiBase()}/activity${query ? `?${query}` : ""}`);
   return handleJson(response);
 }
 
