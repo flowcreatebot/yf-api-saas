@@ -543,6 +543,115 @@ def test_deployed_checkout_and_signed_webhook_activate_customer_subscription(
 
 
 @pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioning(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-idempotent-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    register_payload = register_response.json()
+    session_payload = register_payload.get("session") or {}
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    pre_keys_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert pre_keys_response.status_code == 200
+    pre_keys = ((pre_keys_response.json().get("data") or {}).get("keys") or [])
+    assert pre_keys == []
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    webhook_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": f"cus_smoke_{uuid4().hex[:10]}",
+                "subscription": f"sub_smoke_{uuid4().hex[:10]}",
+                "customer_email": email,
+                "payment_status": "paid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    webhook_payload = json.dumps(webhook_event).encode("utf-8")
+    first_signature = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
+
+    first_webhook = deployed_client.post(
+        "/v1/billing/webhook/stripe",
+        content=webhook_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": first_signature,
+        },
+    )
+    assert first_webhook.status_code == 200
+    first_body = first_webhook.json()
+    assert first_body.get("received") is True
+    assert first_body.get("type") == "checkout.session.completed"
+    assert first_body.get("handled") is True
+    assert first_body.get("provisioned_key") is True
+
+    first_keys_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert first_keys_response.status_code == 200
+    first_keys = ((first_keys_response.json().get("data") or {}).get("keys") or [])
+    assert len(first_keys) == 1
+    assert first_keys[0].get("active") is True
+
+    second_signature = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
+    second_webhook = deployed_client.post(
+        "/v1/billing/webhook/stripe",
+        content=webhook_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": second_signature,
+        },
+    )
+    assert second_webhook.status_code == 200
+    second_body = second_webhook.json()
+    assert second_body.get("received") is True
+    assert second_body.get("type") == "checkout.session.completed"
+    assert second_body.get("handled") is True
+    assert second_body.get("provisioned_key") is False
+
+    second_keys_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert second_keys_response.status_code == 200
+    second_keys = ((second_keys_response.json().get("data") or {}).get("keys") or [])
+    assert len(second_keys) == 1
+    assert second_keys[0].get("id") == first_keys[0].get("id")
+    assert second_keys[0].get("active") is True
+
+
+@pytest.mark.deployed
 @pytest.mark.critical
 @pytest.mark.mutation
 def test_deployed_customer_session_login_me_logout_flow(
