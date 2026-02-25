@@ -752,8 +752,10 @@ def test_deployed_customer_signup_login_then_created_key_enforces_api_auth(
         json={"label": "Deployed Smoke", "env": "test"},
     )
     assert create_key.status_code == 200
+    create_key_payload = create_key.json()
+    assert create_key_payload.get("source") == "customer-db-store"
 
-    key_payload = create_key.json().get("data") or {}
+    key_payload = create_key_payload.get("data") or {}
     raw_key = key_payload.get("rawKey")
     assert raw_key
     assert str(raw_key).startswith("yf_")
@@ -763,7 +765,9 @@ def test_deployed_customer_signup_login_then_created_key_enforces_api_auth(
         headers=auth_headers,
     )
     assert before_overview.status_code == 200
-    before_requests = int(before_overview.json().get("requests") or 0)
+    before_overview_payload = before_overview.json()
+    assert before_overview_payload.get("source") == "customer-db-store"
+    before_requests = int(before_overview_payload.get("requests") or 0)
 
     quote_response = deployed_client.get(
         "/v1/quote/AAPL",
@@ -785,12 +789,28 @@ def test_deployed_customer_signup_login_then_created_key_enforces_api_auth(
         headers=auth_headers,
     )
     assert after_overview.status_code == 200
-    after_requests = int(after_overview.json().get("requests") or 0)
+    after_overview_payload = after_overview.json()
+    assert after_overview_payload.get("source") == "customer-db-store"
+    after_requests = int(after_overview_payload.get("requests") or 0)
 
     if quote_response.status_code in (200, 502):
         assert after_requests >= before_requests + 1
     else:
         assert after_requests == before_requests
+
+    metrics_response = deployed_client.get(
+        "/dashboard/api/metrics?range=24h",
+        headers=auth_headers,
+    )
+    assert metrics_response.status_code == 200
+    assert metrics_response.json().get("source") == "customer-db-store"
+
+    activity_response = deployed_client.get(
+        "/dashboard/api/activity?limit=10",
+        headers=auth_headers,
+    )
+    assert activity_response.status_code == 200
+    assert activity_response.json().get("source") == "customer-db-store"
 
     key_id = str((key_payload.get("key") or {}).get("id") or "")
     assert key_id

@@ -648,6 +648,17 @@ def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_acce
     assert webhook_paid_response.json()['handled'] is True
     assert webhook_paid_response.json()['provisioned_key'] is True
 
+    dashboard_keys = client.get(
+        '/dashboard/api/keys',
+        headers={'Authorization': f'Bearer {session_token}'},
+    )
+    assert dashboard_keys.status_code == 200
+    keys_payload = dashboard_keys.json()
+    assert keys_payload['source'] == 'customer-db-store'
+    assert len(keys_payload['keys']) == 1
+    assert keys_payload['keys'][0]['active'] is True
+    assert keys_payload['keys'][0]['env'] == 'live'
+
     raw_key = f"yf_live_{provisioned_key_suffix}"
 
     market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
@@ -661,6 +672,28 @@ def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_acce
     overview_payload = dashboard_overview.json()
     assert overview_payload['requests'] >= 1
     assert any(entry['path'] == '/v1/quote/{symbol}' for entry in overview_payload['topEndpoints'])
+
+    dashboard_metrics = client.get(
+        '/dashboard/api/metrics?range=24h',
+        headers={'Authorization': f'Bearer {session_token}'},
+    )
+    assert dashboard_metrics.status_code == 200
+    metrics_payload = dashboard_metrics.json()
+    assert metrics_payload['source'] == 'customer-db-store'
+    assert metrics_payload['summary']['requests'] >= 1
+    assert any(entry['path'] == '/v1/quote/{symbol}' for entry in metrics_payload['topEndpoints'])
+
+    dashboard_activity = client.get(
+        '/dashboard/api/activity?limit=20',
+        headers={'Authorization': f'Bearer {session_token}'},
+    )
+    assert dashboard_activity.status_code == 200
+    activity_payload = dashboard_activity.json()
+    assert activity_payload['source'] == 'customer-db-store'
+    assert any(
+        event['action'] == 'usage.request' and event['target'] == '/v1/quote/{symbol}'
+        for event in activity_payload['events']
+    )
 
     class SubscriptionDeletedWebhook:
         @staticmethod
