@@ -1,4 +1,8 @@
+import hashlib
+import hmac
+import json
 import os
+import time
 from uuid import uuid4
 
 import httpx
@@ -27,6 +31,27 @@ def _expect_customer_dashboard_checks() -> bool:
     return os.getenv("DEPLOYED_EXPECT_CUSTOMER_DASHBOARD", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _expect_stripe_mutation_e2e_checks() -> bool:
+    return os.getenv("DEPLOYED_EXPECT_STRIPE_MUTATION_E2E", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _stripe_webhook_secret() -> str:
+    return os.getenv("DEPLOYED_STRIPE_WEBHOOK_SECRET", "").strip()
+
+
+def _stripe_signature_header(payload: bytes, *, secret: str) -> str:
+    timestamp = int(time.time())
+    signed_payload = f"{timestamp}.".encode("utf-8") + payload
+    digest = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={digest}"
+
+
+def _user_id_from_tenant(tenant_id: str) -> int:
+    if not tenant_id.startswith("user-"):
+        raise AssertionError(f"Unexpected tenantId format: {tenant_id}")
+    return int(tenant_id.split("-", 1)[1])
+
+
 @pytest.fixture(scope="module")
 def deployed_base_url() -> str:
     base_url = _base_url()
@@ -47,6 +72,31 @@ def customer_dashboard_checks_enabled() -> bool:
         pytest.skip(
             "DEPLOYED_EXPECT_CUSTOMER_DASHBOARD is not enabled; skipping deployed customer dashboard session canaries"
         )
+    return True
+
+
+@pytest.fixture(scope="module")
+def stripe_mutation_e2e_checks_enabled(customer_dashboard_checks_enabled: bool) -> bool:
+    if not _expect_stripe_mutation_e2e_checks():
+        pytest.skip(
+            "DEPLOYED_EXPECT_STRIPE_MUTATION_E2E is not enabled; skipping deployed Stripe mutation e2e canary"
+        )
+
+    if not _expect_stripe_checkout_checks():
+        pytest.skip(
+            "DEPLOYED_EXPECT_STRIPE_CHECKOUT must be enabled for deployed Stripe mutation e2e canary"
+        )
+
+    if not _expect_webhook_secret_checks():
+        pytest.skip(
+            "DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET must be enabled for deployed Stripe mutation e2e canary"
+        )
+
+    if not _stripe_webhook_secret():
+        pytest.skip(
+            "DEPLOYED_STRIPE_WEBHOOK_SECRET is not set; skipping deployed Stripe mutation e2e canary"
+        )
+
     return True
 
 
@@ -383,6 +433,113 @@ def test_deployed_webhook_rejects_invalid_signature_when_secret_enabled(
         assert "Invalid webhook" in payload.get("detail", "")
     else:
         assert payload.get("detail") == "Stripe webhook secret not configured"
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_checkout_and_signed_webhook_activate_customer_subscription(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-billing-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    register_payload = register_response.json()
+    session_payload = register_payload.get("session") or {}
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    create_key_response = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Stripe Mutation E2E", "env": "test"},
+    )
+    assert create_key_response.status_code == 200
+    raw_key = ((create_key_response.json().get("data") or {}).get("rawKey"))
+    assert raw_key
+
+    pre_subscription_quote = deployed_client.get(
+        "/v1/quote/AAPL",
+        headers={"x-api-key": raw_key},
+    )
+    assert pre_subscription_quote.status_code == 403
+    assert pre_subscription_quote.json().get("detail") == "Subscription inactive"
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+        },
+    )
+    assert checkout_response.status_code == 200
+    checkout_payload = checkout_response.json()
+    assert checkout_payload.get("id")
+    assert str(checkout_payload.get("url", "")).startswith("https://")
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+
+    webhook_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": f"cus_smoke_{uuid4().hex[:10]}",
+                "subscription": f"sub_smoke_{uuid4().hex[:10]}",
+                "customer_email": email,
+                "payment_status": "paid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    webhook_payload = json.dumps(webhook_event).encode("utf-8")
+    signature_header = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
+
+    webhook_response = deployed_client.post(
+        "/v1/billing/webhook/stripe",
+        content=webhook_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": signature_header,
+        },
+    )
+    assert webhook_response.status_code == 200
+    webhook_body = webhook_response.json()
+    assert webhook_body.get("received") is True
+    assert webhook_body.get("type") == "checkout.session.completed"
+    assert webhook_body.get("handled") is True
+
+    post_subscription_quote = deployed_client.get(
+        "/v1/quote/AAPL",
+        headers={"x-api-key": raw_key},
+    )
+    assert post_subscription_quote.status_code in (200, 502)
+
+    post_payload = post_subscription_quote.json()
+    if post_subscription_quote.status_code == 200:
+        assert post_payload.get("symbol") == "AAPL"
+        assert post_payload.get("last_price") is not None
+    else:
+        assert "Upstream provider error" in post_payload.get("detail", "")
 
 
 @pytest.mark.deployed
