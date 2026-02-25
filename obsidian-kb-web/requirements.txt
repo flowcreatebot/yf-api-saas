@@ -1,0 +1,4 @@
+flask>=3.0
+gunicorn>=22.0
+mkdocs>=1.6
+mkdocs-material>=9.5

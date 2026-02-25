@@ -1,0 +1,20 @@
+site_name: Obsidian Knowledge Base
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Plan: PLAN.md
+  - Issues: ISSUES.md
+  - Progress: PROGRESS.md
+  - Decisions: DECISIONS.md
+  - Operating Workflow: OPERATING_WORKFLOW.md
+  - Template Setup: TEMPLATE_SETUP.md
+  - Validation Log: SETUP_VALIDATION_LOG.md
+  - Templates:
+      - Project: templates/project-note.md
+      - Meeting: templates/meeting-note.md
+      - Knowledge: templates/knowledge-note.md
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
