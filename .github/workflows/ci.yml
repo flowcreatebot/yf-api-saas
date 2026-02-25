@@ -29,6 +29,19 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+      - name: Run categorized test matrix (non-deployed)
+        env:
+          PYTHON_BIN: python
+          RUN_DEPLOYED: "0"
+        run: ./scripts/run_test_matrix.sh
+
+      - name: Upload categorized test matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-matrix-report
+          path: reports/latest_test_matrix.txt
+
   docker-smoke:
     runs-on: ubuntu-latest
     needs: test
@@ -64,6 +77,8 @@ jobs:
           DEPLOYED_BASE_URL: ${{ vars.DEPLOYED_BASE_URL || 'https://y-finance-api.onrender.com' }}
           DEPLOYED_API_KEY: ${{ secrets.DEPLOYED_API_KEY }}
           DEPLOYED_EXPECT_DASHBOARD: ${{ vars.DEPLOYED_EXPECT_DASHBOARD || '0' }}
+          DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET: ${{ vars.DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET || '0' }}
+          DEPLOYED_EXPECT_STRIPE_CHECKOUT: ${{ vars.DEPLOYED_EXPECT_STRIPE_CHECKOUT || '0' }}
         run: ./scripts/run_deployed_smoke.sh
 
       - name: Upload deployed smoke report

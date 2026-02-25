@@ -1,9 +1,11 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.config import settings
 
 client = TestClient(app)
+pytestmark = [pytest.mark.integration, pytest.mark.billing, pytest.mark.critical]
 
 
 def test_plans_endpoint():

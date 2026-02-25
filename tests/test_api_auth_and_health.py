@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+pytestmark = [pytest.mark.integration, pytest.mark.critical]
 
 
 PROTECTED_ENDPOINTS = [

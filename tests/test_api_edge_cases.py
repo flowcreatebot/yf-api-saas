@@ -6,6 +6,7 @@ from app.main import app
 from app.config import settings
 
 client = TestClient(app)
+pytestmark = [pytest.mark.integration, pytest.mark.critical]
 
 
 def _auth_headers():

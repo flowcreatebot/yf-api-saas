@@ -143,6 +143,78 @@ export function Button({ tone = "default", ...props }) {
   });
 }
 
+export function RequestTrendChart({ points = [], ariaLabel = "Request trend chart" }) {
+  const normalizedPoints = Array.isArray(points)
+    ? points
+        .map((point) => ({
+          bucket: String(point?.bucket ?? ""),
+          requests: Number(point?.requests ?? 0),
+        }))
+        .filter((point) => Number.isFinite(point.requests) && point.requests >= 0)
+    : [];
+
+  if (!normalizedPoints.length) {
+    return React.createElement("p", { className: "trend-empty" }, "No request trend data available for this range.");
+  }
+
+  const chartWidth = 560;
+  const chartHeight = 140;
+  const padding = { top: 10, right: 12, bottom: 24, left: 10 };
+  const plotWidth = chartWidth - padding.left - padding.right;
+  const plotHeight = chartHeight - padding.top - padding.bottom;
+  const barGap = 4;
+  const barWidth = Math.max((plotWidth - barGap * (normalizedPoints.length - 1)) / normalizedPoints.length, 2);
+  const maxRequests = Math.max(...normalizedPoints.map((point) => point.requests), 1);
+
+  const bars = normalizedPoints.map((point, index) => {
+    const scaledHeight = (point.requests / maxRequests) * plotHeight;
+    const x = padding.left + index * (barWidth + barGap);
+    const y = padding.top + (plotHeight - scaledHeight);
+
+    return React.createElement("rect", {
+      key: `${point.bucket}-${index}`,
+      x,
+      y,
+      width: barWidth,
+      height: Math.max(scaledHeight, 1),
+      rx: 2,
+      className: "trend-bar",
+    });
+  });
+
+  const firstBucket = normalizedPoints[0]?.bucket ?? "";
+  const lastBucket = normalizedPoints[normalizedPoints.length - 1]?.bucket ?? "";
+
+  return React.createElement(
+    "div",
+    { className: "trend-chart" },
+    React.createElement(
+      "svg",
+      {
+        className: "trend-svg",
+        viewBox: `0 0 ${chartWidth} ${chartHeight}`,
+        role: "img",
+        "aria-label": ariaLabel,
+        preserveAspectRatio: "none",
+      },
+      React.createElement("line", {
+        x1: padding.left,
+        y1: chartHeight - padding.bottom,
+        x2: chartWidth - padding.right,
+        y2: chartHeight - padding.bottom,
+        className: "trend-axis",
+      }),
+      bars
+    ),
+    React.createElement(
+      "div",
+      { className: "trend-labels" },
+      React.createElement("span", null, firstBucket),
+      React.createElement("span", null, lastBucket)
+    )
+  );
+}
+
 export function Notice({ tone = "info", children }) {
   return React.createElement("p", { className: `notice ${tone}` }, children);
 }

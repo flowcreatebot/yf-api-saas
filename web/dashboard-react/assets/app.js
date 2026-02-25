@@ -25,10 +25,17 @@ const navItems = [
 const DEFAULT_RANGE = "24h";
 const validRanges = new Set(["24h", "7d", "30d"]);
 const validActivityStatuses = new Set(["", "success", "info", "error"]);
+const validKeyStatuses = new Set(["all", "active", "revoked"]);
+const validKeyEnvironments = new Set(["all", "live", "test"]);
 const DEFAULT_ACTIVITY_FILTERS = {
   status: "",
   action: "",
   limit: "25",
+};
+const DEFAULT_KEY_FILTERS = {
+  q: "",
+  status: "all",
+  env: "all",
 };
 
 const normalizeRange = (value) => (validRanges.has(value) ? value : null);
@@ -44,6 +51,34 @@ const normalizeActivityLimit = (value) => {
   }
 
   return String(Math.min(100, Math.floor(parsed)));
+};
+
+const normalizeKeyStatus = (value) =>
+  validKeyStatuses.has(value ?? DEFAULT_KEY_FILTERS.status) ? value ?? DEFAULT_KEY_FILTERS.status : DEFAULT_KEY_FILTERS.status;
+
+const normalizeKeyEnvironment = (value) =>
+  validKeyEnvironments.has(value ?? DEFAULT_KEY_FILTERS.env) ? value ?? DEFAULT_KEY_FILTERS.env : DEFAULT_KEY_FILTERS.env;
+
+const readKeyFilters = (search) => {
+  const params = new URLSearchParams(search);
+
+  return {
+    q: params.get("q") ?? DEFAULT_KEY_FILTERS.q,
+    status: normalizeKeyStatus(params.get("status") ?? DEFAULT_KEY_FILTERS.status),
+    env: normalizeKeyEnvironment(params.get("env") ?? DEFAULT_KEY_FILTERS.env),
+  };
+};
+
+const sameKeyFilters = (left, right) => left.q === right.q && left.status === right.status && left.env === right.env;
+
+const buildKeyFilterParams = (filters) => {
+  const params = new URLSearchParams();
+
+  if (filters.q.trim()) params.set("q", filters.q.trim());
+  if (filters.status !== DEFAULT_KEY_FILTERS.status) params.set("status", filters.status);
+  if (filters.env !== DEFAULT_KEY_FILTERS.env) params.set("env", filters.env);
+
+  return params;
 };
 
 const readActivityFilters = (search) => {
@@ -67,6 +102,50 @@ const buildActivityParams = (filters) => {
   if (filters.limit !== DEFAULT_ACTIVITY_FILTERS.limit) params.set("limit", filters.limit);
 
   return params;
+};
+
+const buildActivityFilterSummary = (filters) => {
+  const normalizedStatus = normalizeActivityStatus(filters.status);
+  const normalizedAction = (filters.action ?? "").trim();
+  const normalizedLimit = normalizeActivityLimit(filters.limit);
+
+  return {
+    status: normalizedStatus || "all",
+    action: normalizedAction || "any",
+    limit: normalizedLimit,
+  };
+};
+
+const csvEscape = (value) => {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+};
+
+const buildActivityCsv = (events) => {
+  const headers = ["timestamp", "actor", "action", "status", "target"];
+  const lines = events.map((event) => headers.map((key) => csvEscape(event?.[key])).join(","));
+  return [headers.join(","), ...lines].join("\n");
+};
+
+const downloadActivityCsv = (events) => {
+  if (!events.length) {
+    return;
+  }
+
+  const blob = new Blob([buildActivityCsv(events)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  link.href = url;
+  link.download = `activity-${stamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 };
 
 function useHashRoute() {
@@ -189,16 +268,50 @@ function OverviewPage({ range, setRange }) {
   );
 }
 
-function KeysPage() {
+function KeysPage({ search, onUpdateSearch }) {
+  const initialFilters = useMemo(() => readKeyFilters(search), [search]);
   const [keys, setKeys] = useState([]);
   const [label, setLabel] = useState("");
   const [env, setEnv] = useState("test");
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [envFilter, setEnvFilter] = useState("all");
+  const [query, setQuery] = useState(initialFilters.q);
+  const [statusFilter, setStatusFilter] = useState(initialFilters.status);
+  const [envFilter, setEnvFilter] = useState(initialFilters.env);
   const [pendingAction, setPendingAction] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const nextFilters = readKeyFilters(search);
+    const currentFilters = {
+      q: query,
+      status: statusFilter,
+      env: envFilter,
+    };
+
+    if (sameKeyFilters(currentFilters, nextFilters)) {
+      return;
+    }
+
+    setQuery(nextFilters.q);
+    setStatusFilter(nextFilters.status);
+    setEnvFilter(nextFilters.env);
+  }, [search]);
+
+  useEffect(() => {
+    const normalizedFilters = {
+      q: query,
+      status: normalizeKeyStatus(statusFilter),
+      env: normalizeKeyEnvironment(envFilter),
+    };
+    const nextParams = buildKeyFilterParams(normalizedFilters);
+    const currentParams = buildKeyFilterParams(readKeyFilters(search));
+
+    if (nextParams.toString() === currentParams.toString()) {
+      return;
+    }
+
+    onUpdateSearch(nextParams);
+  }, [query, statusFilter, envFilter, search, onUpdateSearch]);
 
   const load = () =>
     getKeys()
@@ -393,6 +506,22 @@ function KeysPage() {
           React.createElement("option", { value: "all" }, "All environments"),
           React.createElement("option", { value: "live" }, "live"),
           React.createElement("option", { value: "test" }, "test")
+        ),
+        React.createElement(
+          Button,
+          {
+            tone: "muted",
+            onClick: () => {
+              setQuery(DEFAULT_KEY_FILTERS.q);
+              setStatusFilter(DEFAULT_KEY_FILTERS.status);
+              setEnvFilter(DEFAULT_KEY_FILTERS.env);
+            },
+            disabled:
+              query === DEFAULT_KEY_FILTERS.q &&
+              statusFilter === DEFAULT_KEY_FILTERS.status &&
+              envFilter === DEFAULT_KEY_FILTERS.env,
+          },
+          "Clear"
         )
       ),
       React.createElement(Table, {
@@ -608,6 +737,23 @@ function ActivityPage({ search, onUpdateSearch }) {
 
   const hasPendingChanges = !sameActivityFilters(draftFilters, appliedFilters);
 
+  const filterSummary = useMemo(() => buildActivityFilterSummary(appliedFilters), [appliedFilters]);
+
+  const renderedEvents = useMemo(
+    () =>
+      events.map((event) => ({
+        ...event,
+        status: React.createElement(
+          "span",
+          { className: `status-pill ${normalizeActivityStatus(event.status) || "info"}` },
+          event.status
+        ),
+      })),
+    [events]
+  );
+
+  const hasNoEvents = !loading && !error && renderedEvents.length === 0;
+
   return React.createElement(
     React.Fragment,
     null,
@@ -658,19 +804,44 @@ function ActivityPage({ search, onUpdateSearch }) {
     error ? React.createElement(Notice, { tone: "error" }, error) : null,
     loading ? React.createElement(Notice, null, "Loading activity…") : null,
     lastUpdated ? React.createElement("p", { className: "card-meta" }, `Last updated: ${lastUpdated}`) : null,
-    React.createElement(Card, {
-      title: "Recent activity",
-      children: React.createElement(Table, {
-        columns: [
-          { key: "timestamp", label: "Timestamp" },
-          { key: "actor", label: "Actor" },
-          { key: "action", label: "Action" },
-          { key: "status", label: "Status" },
-          { key: "target", label: "Target" },
-        ],
-        rows: events,
-      }),
-    })
+    React.createElement(
+      Card,
+      { title: "Recent activity" },
+      React.createElement(
+        "div",
+        { className: "activity-summary" },
+        React.createElement(
+          "p",
+          { className: "card-meta" },
+          `Active filters: status=${filterSummary.status} · action=${filterSummary.action} · limit=${filterSummary.limit}`
+        ),
+        React.createElement(
+          Button,
+          {
+            tone: "muted",
+            onClick: () => downloadActivityCsv(events),
+            disabled: !events.length,
+          },
+          "Export CSV"
+        )
+      ),
+      hasNoEvents
+        ? React.createElement(
+            Notice,
+            null,
+            "No activity events matched the current filters. Try broadening status/action filters or increasing the limit."
+          )
+        : React.createElement(Table, {
+            columns: [
+              { key: "timestamp", label: "Timestamp" },
+              { key: "actor", label: "Actor" },
+              { key: "action", label: "Action" },
+              { key: "status", label: "Status" },
+              { key: "target", label: "Target" },
+            ],
+            rows: renderedEvents,
+          })
+    )
   );
 }
 
@@ -721,7 +892,10 @@ function App() {
 
   const page =
     route === "keys"
-      ? React.createElement(KeysPage)
+      ? React.createElement(KeysPage, {
+          search: location.search,
+          onUpdateSearch: (nextParams) => navigate("keys", nextParams),
+        })
       : route === "metrics"
       ? React.createElement(MetricsPage, { range, setRange })
       : route === "activity"

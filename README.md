@@ -42,6 +42,7 @@ Expected: JSON with `symbol`, price fields, and `stale` flag.
 - Live docs (OpenAPI UI): `GET /docs`
 - Error contract checklist: `docs/ERROR_CONTRACT_CHECKLIST.md`
 - Billing safety checklist: `docs/BILLING_SAFETY_CHECKLIST.md`
+- Test run matrix + marker lanes: `docs/TEST_RUN_MATRIX.md`
 - Deployed smoke pack: `docs/DEPLOYED_SMOKE.md`
 - Health: `GET /v1/health`
 - Quote: `GET /v1/quote/{symbol}`
@@ -89,9 +90,9 @@ Dashboard routes during migration:
 
 Current dashboard includes:
 - Overview wired to `/internal/api/overview?range=24h|7d|30d`
+- Metrics wired to `/internal/api/metrics?range=24h|7d|30d` (structured payload: summary, trend, status breakdown, latency buckets, top endpoints)
 - API Keys wired to `/internal/api/keys` + create/rotate/revoke/activate
 - Activity wired to `/internal/api/activity`
-- Metrics placeholder page
 
 See `docs/DASHBOARD_REACT.md` for local/dev + migration mount plan.
 

@@ -1,5 +1,7 @@
 from datetime import datetime
+
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -7,6 +9,7 @@ from app.config import settings
 
 
 client = TestClient(app)
+pytestmark = [pytest.mark.integration, pytest.mark.critical]
 
 
 class DummyTicker:

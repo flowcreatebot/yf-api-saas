@@ -1,8 +1,10 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 client = TestClient(app)
+pytestmark = [pytest.mark.integration, pytest.mark.critical]
 
 
 def test_internal_root_redirects_to_dashboard():
@@ -21,6 +23,43 @@ def test_dashboard_asset_served():
     r = client.get('/internal/dashboard/assets/app.js')
     assert r.status_code == 200
     assert 'createRoot' in r.text
+    assert 'Usage & Metrics' in r.text
+    assert 'Loading usage metrics…' in r.text
+    assert 'Top endpoints by requests' in r.text
+    assert 'readKeyFilters' in r.text
+    assert 'buildKeyFilterParams' in r.text
+    assert 'onUpdateSearch: (nextParams) => navigate("keys", nextParams)' in r.text
+    assert 'if (filters.q.trim()) params.set("q", filters.q.trim())' in r.text
+    assert 'params.set("status", filters.status)' in r.text
+    assert 'params.set("env", filters.env)' in r.text
+    assert 'Active filters: status=${filterSummary.status}' in r.text
+    assert 'Export CSV' in r.text
+    assert 'No activity events matched the current filters.' in r.text
+
+
+@pytest.mark.parametrize(
+    ('path', 'target_hash'),
+    [
+        ('keys.html', '#/keys'),
+        ('metrics.html', '#/metrics'),
+        ('activity.html', '#/activity'),
+        ('overview.html', '#/overview'),
+        ('app.html', '#/overview'),
+    ],
+)
+def test_dashboard_react_legacy_compat_entrypoints(path, target_hash):
+    r = client.get(f'/internal/dashboard/{path}')
+    assert r.status_code == 200
+    assert 'window.location.replace' in r.text
+    assert target_hash in r.text
+
+
+def test_dashboard_react_legacy_login_entrypoint_redirects_to_overview():
+    r = client.get('/internal/dashboard/login.html')
+    assert r.status_code == 200
+    assert 'window.location.replace' in r.text
+    assert '#/overview' in r.text
+    assert 'Login moved to the main dashboard shell' in r.text
 
 
 def test_dashboard_legacy_login_shell_served():
@@ -84,6 +123,54 @@ def test_dashboard_overview_invalid_range_rejected():
     assert r.status_code == 422
 
 
+def test_dashboard_metrics_placeholder_api_payload():
+    r = client.get('/internal/api/metrics')
+    assert r.status_code == 200
+
+    payload = r.json()
+    assert payload['source'] == 'placeholder'
+    assert payload['range'] == '24h'
+    assert payload['summary']['requests'] > 0
+    assert payload['summary']['p95LatencyMs'] > 0
+
+    assert isinstance(payload['requestTrend'], list)
+    assert payload['requestTrend'][0]['bucket']
+    assert payload['requestTrend'][0]['requests'] > 0
+
+    assert isinstance(payload['statusBreakdown'], list)
+    assert payload['statusBreakdown'][0]['status'] in ('2xx', '4xx', '5xx')
+    assert payload['statusBreakdown'][0]['requests'] > 0
+
+    assert isinstance(payload['latencyBuckets'], list)
+    assert payload['latencyBuckets'][0]['bucket']
+    assert payload['latencyBuckets'][0]['requests'] > 0
+
+    assert isinstance(payload['topEndpoints'], list)
+    assert payload['topEndpoints'][0]['path'].startswith('/v1/')
+
+
+def test_dashboard_metrics_placeholder_range_query_contract():
+    default_payload = client.get('/internal/api/metrics').json()
+
+    r_7d = client.get('/internal/api/metrics?range=7d')
+    assert r_7d.status_code == 200
+    payload_7d = r_7d.json()
+    assert payload_7d['range'] == '7d'
+
+    r_30d = client.get('/internal/api/metrics?range=30d')
+    assert r_30d.status_code == 200
+    payload_30d = r_30d.json()
+    assert payload_30d['range'] == '30d'
+
+    assert payload_7d['summary']['requests'] > default_payload['summary']['requests']
+    assert payload_30d['summary']['requests'] > payload_7d['summary']['requests']
+
+
+def test_dashboard_metrics_invalid_range_rejected():
+    r = client.get('/internal/api/metrics?range=1y')
+    assert r.status_code == 422
+
+
 def test_dashboard_activity_api_payload():
     r = client.get('/internal/api/activity')
     assert r.status_code == 200
@@ -94,8 +181,42 @@ def test_dashboard_activity_api_payload():
     first = payload['events'][0]
     assert first['actor']
     assert first['action']
-    assert first['status'] in ('success', 'info')
+    assert first['status'] in ('success', 'info', 'error')
     assert first['target']
+
+
+def test_dashboard_activity_filter_status_contract():
+    r = client.get('/internal/api/activity?status=error')
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload['events']
+    assert all(event['status'] == 'error' for event in payload['events'])
+
+
+def test_dashboard_activity_filter_action_contract():
+    r = client.get('/internal/api/activity?action=RoTaTe')
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload['events']
+    assert all('rotate' in event['action'].lower() for event in payload['events'])
+
+
+def test_dashboard_activity_filter_limit_bounds_contract():
+    r = client.get('/internal/api/activity?limit=1')
+    assert r.status_code == 200
+    payload = r.json()
+    assert len(payload['events']) == 1
+
+    too_low = client.get('/internal/api/activity?limit=0')
+    assert too_low.status_code == 422
+
+    too_high = client.get('/internal/api/activity?limit=101')
+    assert too_high.status_code == 422
+
+
+def test_dashboard_activity_filter_invalid_status_rejected():
+    r = client.get('/internal/api/activity?status=warn')
+    assert r.status_code == 422
 
 
 def test_dashboard_keys_api_payload():
