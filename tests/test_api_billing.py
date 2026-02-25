@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -8,12 +10,33 @@ client = TestClient(app)
 pytestmark = [pytest.mark.integration, pytest.mark.billing, pytest.mark.critical]
 
 
-def test_plans_endpoint():
+def _new_email() -> str:
+    return f"billing-{uuid4().hex[:10]}@example.com"
+
+
+def _register_customer(password: str = "Passw0rd!") -> tuple[str, str]:
+    email = _new_email()
+    response = client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert response.status_code == 200
+    token = response.json()["session"]["token"]
+    return email, token
+
+
+def test_plans_endpoint(monkeypatch):
+    monkeypatch.setattr(settings, "billing_starter_plan_id", "starter-config")
+    monkeypatch.setattr(settings, "billing_starter_plan_name", "Starter Config")
+    monkeypatch.setattr(settings, "billing_starter_plan_price_usd", 9.99)
+    monkeypatch.setattr(settings, "billing_starter_plan_interval", "month")
+    monkeypatch.setattr(settings, "billing_starter_plan_description", "Configured plan")
+
     r = client.get('/v1/billing/plans')
     assert r.status_code == 200
     body = r.json()
-    assert 'plans' in body
-    assert body['plans'][0]['price_usd'] == 4.99
+    assert body['plans'][0]['id'] == 'starter-config'
+    assert body['plans'][0]['price_usd'] == 9.99
 
 
 def test_checkout_session_requires_config(monkeypatch):
@@ -123,6 +146,81 @@ def test_checkout_session_empty_allowlist_keeps_previous_behavior(monkeypatch):
     assert r.status_code == 200
 
 
+def test_checkout_session_attaches_authenticated_customer(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import User
+
+    email, token = _register_customer()
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+
+    calls: dict[str, dict] = {}
+
+    class DummyCustomer:
+        @staticmethod
+        def create(**kwargs):
+            calls['customer'] = kwargs
+            return {'id': 'cus_test_new'}
+
+    class DummySession:
+        @staticmethod
+        def create(**kwargs):
+            calls['checkout'] = kwargs
+            return {'id': 'cs_test_123', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    monkeypatch.setattr(billing.stripe, 'Customer', DummyCustomer)
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummySession)
+
+    response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {token}'},
+        json={
+            'email': email,
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert response.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        assert user.stripe_customer_id == 'cus_test_new'
+        assert calls['checkout']['customer'] == 'cus_test_new'
+        assert calls['checkout']['metadata']['user_id'] == str(user.id)
+
+
+def test_checkout_session_rejects_mismatched_authenticated_email(monkeypatch):
+    import app.routes.billing as billing
+
+    _email, token = _register_customer()
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+
+    class DummySession:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': 'cs_test_123', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummySession)
+
+    response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {token}'},
+        json={
+            'email': _new_email(),
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert response.status_code == 403
+
+
 def test_webhook_requires_secret_configured():
     r = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'dummy'})
     assert r.status_code in (400, 503)
@@ -142,13 +240,16 @@ def test_webhook_supported_event_is_marked_handled(monkeypatch):
     class DummyWebhook:
         @staticmethod
         def construct_event(payload, sig_header, secret):
-            return {'type': 'invoice.payment_succeeded'}
+            return {
+                'type': 'customer.subscription.updated',
+                'data': {'object': {'id': 'sub_missing', 'status': 'active'}},
+            }
 
     monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
 
     r = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
     assert r.status_code == 200
-    assert r.json()['handled'] is True
+    assert r.json()['handled'] is False
 
 
 def test_webhook_invalid_signature_returns_400(monkeypatch):
@@ -176,7 +277,7 @@ def test_webhook_unknown_event_is_unhandled(monkeypatch):
     class DummyWebhook:
         @staticmethod
         def construct_event(payload, sig_header, secret):
-            return {'type': 'charge.refunded'}
+            return {'type': 'charge.refunded', 'data': {'object': {}}}
 
     monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
 
@@ -196,3 +297,162 @@ def test_checkout_rejects_insecure_redirect_urls(monkeypatch):
         'cancel_url': 'https://example.com/cancel'
     })
     assert r.status_code == 422
+
+
+def test_webhook_checkout_completed_creates_subscription_and_first_api_key(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    customer_id = f"cus_test_{uuid4().hex[:8]}"
+    subscription_id = f"sub_test_{uuid4().hex[:8]}"
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'customer': customer_id,
+                        'subscription': subscription_id,
+                        'customer_email': email,
+                        'payment_status': 'paid',
+                        'metadata': {'user_id': str(user_id)},
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert response.status_code == 200
+    assert response.json()['handled'] is True
+    assert response.json()['provisioned_key'] is True
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        assert user is not None
+        assert user.stripe_customer_id == customer_id
+
+        subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
+        assert subscription is not None
+        assert subscription.stripe_subscription_id == subscription_id
+        assert subscription.status == 'active'
+
+        key = db.query(APIKey).filter(APIKey.user_id == user_id, APIKey.status == 'active').first()
+        assert key is not None
+
+
+def test_webhook_subscription_updated_updates_existing_subscription(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import Subscription, User
+
+    email, _token = _register_customer()
+
+    subscription_id = f"sub_update_{uuid4().hex[:8]}"
+    customer_id = f"cus_update_{uuid4().hex[:8]}"
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user.stripe_customer_id = customer_id
+        existing = Subscription(
+            user_id=user.id,
+            stripe_subscription_id=subscription_id,
+            status='active',
+            plan='starter-monthly',
+        )
+        db.add(existing)
+        db.commit()
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.updated',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'past_due',
+                        'current_period_end': 1760000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert response.status_code == 200
+    assert response.json()['handled'] is True
+
+    with SessionLocal() as db:
+        updated = db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
+        assert updated is not None
+        assert updated.status == 'past_due'
+        assert updated.current_period_end is not None
+
+
+def test_webhook_subscription_deleted_marks_subscription_canceled(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import Subscription, User
+
+    email, _token = _register_customer()
+
+    subscription_id = f"sub_deleted_{uuid4().hex[:8]}"
+    customer_id = f"cus_deleted_{uuid4().hex[:8]}"
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user.stripe_customer_id = customer_id
+        existing = Subscription(
+            user_id=user.id,
+            stripe_subscription_id=subscription_id,
+            status='active',
+            plan='starter-monthly',
+        )
+        db.add(existing)
+        db.commit()
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.deleted',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'canceled',
+                        'current_period_end': 1765000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert response.status_code == 200
+    assert response.json()['handled'] is True
+
+    with SessionLocal() as db:
+        updated = db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
+        assert updated is not None
+        assert updated.status == 'canceled'

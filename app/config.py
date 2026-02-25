@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
     stripe_price_id_monthly: str = Field(default="", alias="STRIPE_PRICE_ID_MONTHLY")
     billing_allowed_redirect_hosts: str = Field(default="", alias="BILLING_ALLOWED_REDIRECT_HOSTS")
+    billing_starter_plan_id: str = Field(default="starter-monthly", alias="BILLING_STARTER_PLAN_ID")
+    billing_starter_plan_name: str = Field(default="Starter", alias="BILLING_STARTER_PLAN_NAME")
+    billing_starter_plan_price_usd: float = Field(default=4.99, alias="BILLING_STARTER_PLAN_PRICE_USD")
+    billing_starter_plan_interval: str = Field(default="month", alias="BILLING_STARTER_PLAN_INTERVAL")
+    billing_starter_plan_description: str = Field(
+        default="Yahoo Finance API access for no-code workflows",
+        alias="BILLING_STARTER_PLAN_DESCRIPTION",
+    )
 
     database_url: str = Field(default="sqlite:///./dev.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")

@@ -177,6 +177,25 @@ def require_customer_session(
     )
 
 
+def get_customer_session_optional(
+    authorization: str | None = Header(default=None),
+    x_customer_session: str | None = Header(default=None, alias="X-Customer-Session"),
+    db: Session = Depends(get_db),
+) -> CustomerSessionContext | None:
+    token = _extract_session_token(authorization=authorization, x_customer_session=x_customer_session)
+    if not token:
+        return None
+
+    try:
+        return require_customer_session(
+            authorization=authorization,
+            x_customer_session=x_customer_session,
+            db=db,
+        )
+    except HTTPException:
+        return None
+
+
 @router.post("/auth/register")
 def customer_register(payload: CustomerRegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == payload.email.lower()).first()
