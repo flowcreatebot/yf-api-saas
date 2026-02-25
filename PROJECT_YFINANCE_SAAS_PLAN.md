@@ -59,7 +59,7 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ## Phase 3: Billing completion (Stripe end-to-end)
 
-**Status: IN PROGRESS**
+**Status: COMPLETE**
 
 ### Work
 
@@ -71,15 +71,15 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ### Done when
 
-- [ ] Full flow works: register → checkout → Stripe test payment → webhook fires → Subscription created → API key provisioned
-- [ ] User can call market endpoints with their provisioned key
-- [ ] Subscription cancellation (via webhook) revokes API access
+- [x] Full flow works: register → checkout → Stripe test payment → webhook fires → Subscription created → API key provisioned
+- [x] User can call market endpoints with their provisioned key
+- [x] Subscription cancellation (via webhook) revokes API access
 
 ---
 
 ## Phase 4: Dashboard goes real
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ### Work
 

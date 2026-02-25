@@ -3,7 +3,9 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db import SessionLocal
 from app.main import app
+from app.models import APIKey, User
 
 client = TestClient(app)
 pytestmark = [pytest.mark.integration, pytest.mark.critical]
@@ -159,6 +161,52 @@ def test_customer_dashboard_keys_are_tenant_scoped():
     assert list_b.status_code == 200
     ids_b = {entry["id"] for entry in list_b.json()["keys"]}
     assert key_a["id"] not in ids_b
+
+
+def test_customer_dashboard_key_crud_persists_in_database():
+    email = _new_email()
+    token = _register(email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = client.post(
+        "/dashboard/api/keys/create",
+        headers=headers,
+        json={"label": "Primary", "env": "test"},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["source"] == "customer-db-store"
+    assert body["data"]["rawKey"].startswith("yf_test_")
+
+    key_id = body["data"]["key"]["id"]
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        key_row = db.query(APIKey).filter(APIKey.id == int(key_id), APIKey.user_id == user.id).first()
+        assert key_row is not None
+        assert key_row.status == "active"
+        assert key_row.name == "test:Primary"
+
+    rotated = client.post(f"/dashboard/api/keys/{key_id}/rotate", headers=headers)
+    assert rotated.status_code == 200
+    assert rotated.json()["data"]["rawKey"].startswith("yf_test_")
+
+    revoked = client.post(f"/dashboard/api/keys/{key_id}/revoke", headers=headers)
+    assert revoked.status_code == 200
+
+    with SessionLocal() as db:
+        row = db.query(APIKey).filter(APIKey.id == int(key_id)).first()
+        assert row is not None
+        assert row.status == "revoked"
+
+    activated = client.post(f"/dashboard/api/keys/{key_id}/activate", headers=headers)
+    assert activated.status_code == 200
+
+    with SessionLocal() as db:
+        row = db.query(APIKey).filter(APIKey.id == int(key_id)).first()
+        assert row is not None
+        assert row.status == "active"
 
 
 @pytest.mark.parametrize("action", ["rotate", "revoke", "activate"])

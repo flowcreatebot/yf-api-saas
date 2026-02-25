@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from threading import Lock
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import uuid4
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.models import APIKey
+from app.security import hash_api_key
 
 OverviewRange = Literal["24h", "7d", "30d"]
 MetricsRange = Literal["24h", "7d", "30d"]
@@ -146,64 +149,104 @@ class CreateKeyRequest(BaseModel):
     env: Literal["live", "test"] = "test"
 
 
-_store_lock = Lock()
-_key_store: dict[str, DashboardKey] = {
-    "key_live_primary": DashboardKey(
-        id="key_live_primary",
-        label="Primary production",
-        prefix="yf_live_••••",
-        env="live",
-        active=True,
-        lastUsed="5m ago",
-    ),
-    "key_test_zapier": DashboardKey(
-        id="key_test_zapier",
-        label="Zapier trial",
-        prefix="yf_test_••••",
-        env="test",
-        active=True,
-        lastUsed="42m ago",
-    ),
-}
+def _key_env(api_key: APIKey) -> Literal["live", "test"]:
+    if api_key.name.lower().startswith("test:"):
+        return "test"
+    return "live"
 
 
-def _masked_prefix(env: Literal["live", "test"]) -> str:
-    tag = "live" if env == "live" else "test"
-    return f"yf_{tag}_••{uuid4().hex[:4]}"
+def _humanize_last_used(value: datetime | None) -> str:
+    if value is None:
+        return "never"
+
+    now = datetime.now(UTC)
+    normalized = value if value.tzinfo else value.replace(tzinfo=UTC)
+    delta = now - normalized
+
+    if delta < timedelta(minutes=1):
+        return "just now"
+    if delta < timedelta(hours=1):
+        return f"{int(delta.total_seconds() // 60)}m ago"
+    if delta < timedelta(days=1):
+        return f"{int(delta.total_seconds() // 3600)}h ago"
+    return f"{delta.days}d ago"
 
 
-def _key_list() -> list[dict]:
-    return [k.model_dump() for k in _key_store.values()]
+def _masked_prefix(api_key: APIKey) -> str:
+    env = _key_env(api_key)
+    return f"yf_{env}_••{api_key.id:04d}"
 
 
-def _success(action: str, key: DashboardKey | None = None) -> dict:
-    return {
+def _dashboard_key(api_key: APIKey) -> DashboardKey:
+    env = _key_env(api_key)
+    label = api_key.name
+    if label.lower().startswith(("test:", "live:")):
+        label = label.split(":", 1)[1].strip() or label
+
+    return DashboardKey(
+        id=str(api_key.id),
+        label=label,
+        prefix=_masked_prefix(api_key),
+        env=env,
+        active=api_key.status == "active",
+        lastUsed=_humanize_last_used(api_key.last_used_at),
+    )
+
+
+def _key_list(db: Session, user_id: int) -> list[dict]:
+    rows = (
+        db.query(APIKey)
+        .filter(APIKey.user_id == user_id)
+        .order_by(APIKey.id.desc())
+        .all()
+    )
+    return [_dashboard_key(row).model_dump() for row in rows]
+
+
+def _success(action: str, db: Session, user_id: int, key: DashboardKey | None = None, raw_key: str | None = None) -> dict:
+    payload: dict = {
         "ok": True,
-        "source": "mock-store",
+        "source": "db-store",
         "action": action,
         "data": {
             "key": key.model_dump() if key else None,
-            "keys": _key_list(),
+            "keys": _key_list(db, user_id),
         },
         "error": None,
         "timestamp": datetime.now(UTC).isoformat(),
     }
+    if raw_key is not None:
+        payload["data"]["rawKey"] = raw_key
+    return payload
 
 
-def _missing_key_error(action: str, key_id: str) -> HTTPException:
+def _missing_key_error(action: str, key_id: str, db: Session, user_id: int) -> HTTPException:
     return HTTPException(
         status_code=404,
         detail={
             "ok": False,
-            "source": "mock-store",
+            "source": "db-store",
             "action": action,
-            "data": {"key": None, "keys": _key_list()},
+            "data": {"key": None, "keys": _key_list(db, user_id)},
             "error": {
                 "code": "KEY_NOT_FOUND",
                 "message": f"Key '{key_id}' was not found.",
             },
             "timestamp": datetime.now(UTC).isoformat(),
         },
+    )
+
+
+def _find_user_key(db: Session, user_id: int, key_id: str) -> APIKey | None:
+    try:
+        key_pk = int(key_id)
+    except ValueError:
+        return None
+
+    return (
+        db.query(APIKey)
+        .filter(APIKey.id == key_pk, APIKey.user_id == user_id)
+        .first()
     )
 
 
@@ -231,35 +274,42 @@ def get_dashboard_metrics(range: MetricsRange):
     }
 
 
-def get_dashboard_activity(status: ActivityStatus | None = None, action: str | None = None, limit: int = 25):
+def get_dashboard_activity(
+    tenant_id: str,
+    actor_email: str,
+    status: ActivityStatus | None = None,
+    action: str | None = None,
+    limit: int = 25,
+):
+    tenant_fragment = "".join(ch if ch.isalnum() else "-" for ch in tenant_id.lower()).strip("-") or "tenant"
     events = [
         {
             "timestamp": datetime.now(UTC).isoformat(),
             "actor": "system",
             "action": "key.rotate",
             "status": "success",
-            "target": "key_live_primary",
+            "target": f"key_{tenant_fragment}_live_primary",
         },
         {
             "timestamp": datetime.now(UTC).isoformat(),
-            "actor": "owner@example.com",
+            "actor": actor_email,
             "action": "key.create",
             "status": "success",
-            "target": "Zapier sandbox",
+            "target": f"{tenant_fragment}-zapier-sandbox",
         },
         {
             "timestamp": datetime.now(UTC).isoformat(),
             "actor": "system",
             "action": "usage.alert",
             "status": "info",
-            "target": "p95 latency spike",
+            "target": f"{tenant_fragment}:p95-latency-spike",
         },
         {
             "timestamp": datetime.now(UTC).isoformat(),
             "actor": "system",
             "action": "key.rotate",
             "status": "error",
-            "target": "key_test_zapier",
+            "target": f"key_{tenant_fragment}_test_zapier",
         },
     ]
 
@@ -273,54 +323,65 @@ def get_dashboard_activity(status: ActivityStatus | None = None, action: str | N
     return {"source": "placeholder", "events": events[:limit]}
 
 
-def get_dashboard_keys():
-    with _store_lock:
-        return {"keys": _key_list(), "source": "mock-store"}
+def get_dashboard_keys(db: Session, user_id: int):
+    return {"keys": _key_list(db, user_id), "source": "db-store"}
 
 
-def create_dashboard_key(payload: CreateKeyRequest):
-    with _store_lock:
-        key_id = f"key_{uuid4().hex[:10]}"
-        key = DashboardKey(
-            id=key_id,
-            label=payload.label.strip(),
-            prefix=_masked_prefix(payload.env),
-            env=payload.env,
-            active=True,
-            lastUsed="never",
-        )
-        _key_store[key_id] = key
-        return _success("create", key)
+def create_dashboard_key(db: Session, user_id: int, payload: CreateKeyRequest):
+    raw_key = f"yf_{payload.env}_{secrets.token_urlsafe(24)}"
+    label = payload.label.strip()
+
+    api_key = APIKey(
+        key_hash=hash_api_key(raw_key),
+        user_id=user_id,
+        name=f"{payload.env}:{label}",
+        status="active",
+    )
+    db.add(api_key)
+    db.commit()
+    db.refresh(api_key)
+
+    return _success("create", db, user_id, _dashboard_key(api_key), raw_key=raw_key)
 
 
-def rotate_dashboard_key(key_id: str):
-    with _store_lock:
-        key = _key_store.get(key_id)
-        if not key:
-            raise _missing_key_error("rotate", key_id)
+def rotate_dashboard_key(db: Session, user_id: int, key_id: str):
+    api_key = _find_user_key(db, user_id, key_id)
+    if not api_key:
+        raise _missing_key_error("rotate", key_id, db, user_id)
 
-        key = key.model_copy(update={"prefix": _masked_prefix(key.env), "lastUsed": "just now"})
-        _key_store[key_id] = key
-        return _success("rotate", key)
+    env = _key_env(api_key)
+    raw_key = f"yf_{env}_{secrets.token_urlsafe(24)}"
+    api_key.key_hash = hash_api_key(raw_key)
+    api_key.status = "active"
+    api_key.last_used_at = datetime.now(UTC)
 
+    db.commit()
+    db.refresh(api_key)
 
-def revoke_dashboard_key(key_id: str):
-    with _store_lock:
-        key = _key_store.get(key_id)
-        if not key:
-            raise _missing_key_error("revoke", key_id)
-
-        key = key.model_copy(update={"active": False, "lastUsed": "just now"})
-        _key_store[key_id] = key
-        return _success("revoke", key)
+    return _success("rotate", db, user_id, _dashboard_key(api_key), raw_key=raw_key)
 
 
-def activate_dashboard_key(key_id: str):
-    with _store_lock:
-        key = _key_store.get(key_id)
-        if not key:
-            raise _missing_key_error("activate", key_id)
+def revoke_dashboard_key(db: Session, user_id: int, key_id: str):
+    api_key = _find_user_key(db, user_id, key_id)
+    if not api_key:
+        raise _missing_key_error("revoke", key_id, db, user_id)
 
-        key = key.model_copy(update={"active": True, "lastUsed": "just now"})
-        _key_store[key_id] = key
-        return _success("activate", key)
+    api_key.status = "revoked"
+    api_key.last_used_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(api_key)
+
+    return _success("revoke", db, user_id, _dashboard_key(api_key))
+
+
+def activate_dashboard_key(db: Session, user_id: int, key_id: str):
+    api_key = _find_user_key(db, user_id, key_id)
+    if not api_key:
+        raise _missing_key_error("activate", key_id, db, user_id)
+
+    api_key.status = "active"
+    api_key.last_used_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(api_key)
+
+    return _success("activate", db, user_id, _dashboard_key(api_key))

@@ -315,11 +315,14 @@ def get_customer_dashboard_activity(
 
 
 @router.get("/keys")
-def get_customer_dashboard_keys(session: CustomerSessionContext = Depends(require_customer_session)):
-    payload = get_dashboard_keys(session.tenant_id)
+def get_customer_dashboard_keys(
+    session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
+):
+    payload = get_dashboard_keys(db, session.user_id)
     return {
         **payload,
-        "source": "customer-mock-store",
+        "source": "customer-db-store",
         "scope": {
             "tenantId": session.tenant_id,
             "email": session.email,
@@ -331,9 +334,10 @@ def get_customer_dashboard_keys(session: CustomerSessionContext = Depends(requir
 def create_customer_dashboard_key(
     payload: CreateKeyRequest,
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    response = create_dashboard_key(session.tenant_id, payload)
-    response["source"] = "customer-mock-store"
+    response = create_dashboard_key(db, session.user_id, payload)
+    response["source"] = "customer-db-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
         "email": session.email,
@@ -345,9 +349,10 @@ def create_customer_dashboard_key(
 def rotate_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    response = rotate_dashboard_key(session.tenant_id, key_id)
-    response["source"] = "customer-mock-store"
+    response = rotate_dashboard_key(db, session.user_id, key_id)
+    response["source"] = "customer-db-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
         "email": session.email,
@@ -359,9 +364,10 @@ def rotate_customer_dashboard_key(
 def revoke_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    response = revoke_dashboard_key(session.tenant_id, key_id)
-    response["source"] = "customer-mock-store"
+    response = revoke_dashboard_key(db, session.user_id, key_id)
+    response["source"] = "customer-db-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
         "email": session.email,
@@ -373,9 +379,10 @@ def revoke_customer_dashboard_key(
 def activate_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    response = activate_dashboard_key(session.tenant_id, key_id)
-    response["source"] = "customer-mock-store"
+    response = activate_dashboard_key(db, session.user_id, key_id)
+    response["source"] = "customer-db-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
         "email": session.email,
