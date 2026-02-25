@@ -453,7 +453,7 @@ def test_deployed_customer_session_login_me_logout_flow(
 @pytest.mark.deployed
 @pytest.mark.critical
 @pytest.mark.mutation
-def test_deployed_customer_created_key_enforces_api_auth(
+def test_deployed_customer_signup_login_then_created_key_enforces_api_auth(
     deployed_client: httpx.Client,
     customer_dashboard_checks_enabled: bool,
 ):
@@ -466,8 +466,16 @@ def test_deployed_customer_created_key_enforces_api_auth(
     )
     assert register_response.status_code == 200
 
-    session = (register_response.json().get("session") or {})
-    token = session.get("token")
+    login_response = deployed_client.post(
+        "/dashboard/api/session/login",
+        json={"email": email, "password": password},
+    )
+    assert login_response.status_code == 200
+
+    login_payload = login_response.json()
+    assert login_payload.get("ok") is True
+    assert login_payload.get("source") == "customer-db-session"
+    token = ((login_payload.get("session") or {}).get("token"))
     assert token
 
     auth_headers = {"Authorization": f"Bearer {token}"}
@@ -517,5 +525,21 @@ def test_deployed_customer_created_key_enforces_api_auth(
         assert after_requests >= before_requests + 1
     else:
         assert after_requests == before_requests
+
+    key_id = str((key_payload.get("key") or {}).get("id") or "")
+    assert key_id
+
+    revoke_response = deployed_client.post(
+        f"/dashboard/api/keys/{key_id}/revoke",
+        headers=auth_headers,
+    )
+    assert revoke_response.status_code == 200
+
+    revoked_quote = deployed_client.get(
+        "/v1/quote/AAPL",
+        headers={"x-api-key": raw_key},
+    )
+    assert revoked_quote.status_code == 401
+    assert revoked_quote.json().get("detail") == "Invalid API key"
 
 
