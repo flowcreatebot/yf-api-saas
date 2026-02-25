@@ -25,6 +25,7 @@ run_lane() {
 
   run_lane "critical-integration" "integration and critical and not deployed"
   run_lane "billing-integration" "integration and billing and not deployed"
+  run_lane "critical-e2e" "e2e and critical and not deployed"
 
   if [[ "$RUN_DEPLOYED" == "1" ]]; then
     run_lane "critical-deployed" "deployed and critical" tests/test_deployed_smoke.py

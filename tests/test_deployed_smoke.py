@@ -1,4 +1,5 @@
 import os
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -451,5 +452,53 @@ def test_deployed_customer_session_login_me_logout_flow(
     )
     assert post_logout.status_code == 401
     assert post_logout.json().get("detail") == "Invalid customer session"
+
+
+@pytest.mark.deployed
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_customer_created_key_enforces_api_auth(
+    deployed_client: httpx.Client,
+    customer_dashboard_checks_enabled: bool,
+):
+    email = f"deployed-key-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    session = (register_response.json().get("session") or {})
+    token = session.get("token")
+    assert token
+
+    create_key = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"label": "Deployed Smoke", "env": "test"},
+    )
+    assert create_key.status_code == 200
+
+    key_payload = create_key.json().get("data") or {}
+    raw_key = key_payload.get("rawKey")
+    assert raw_key
+    assert str(raw_key).startswith("yf_")
+
+    quote_response = deployed_client.get(
+        "/v1/quote/AAPL",
+        headers={"x-api-key": raw_key},
+    )
+    assert quote_response.status_code in (200, 403, 502)
+
+    quote_payload = quote_response.json()
+    if quote_response.status_code == 200:
+        assert quote_payload.get("symbol") == "AAPL"
+        assert quote_payload.get("last_price") is not None
+    elif quote_response.status_code == 403:
+        assert quote_payload.get("detail") == "Subscription inactive"
+    else:
+        assert "Upstream provider error" in quote_payload.get("detail", "")
 
 

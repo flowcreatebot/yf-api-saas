@@ -504,6 +504,7 @@ def test_webhook_checkout_completed_unpaid_does_not_provision_key(monkeypatch):
         assert key is None
 
 
+@pytest.mark.e2e
 def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_access(monkeypatch):
     import app.routes.billing as billing
     import app.routes.market as market
@@ -590,6 +591,15 @@ def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_acce
 
     market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
     assert market_response.status_code == 200
+
+    dashboard_overview = client.get(
+        '/dashboard/api/overview?range=24h',
+        headers={'Authorization': f'Bearer {session_token}'},
+    )
+    assert dashboard_overview.status_code == 200
+    overview_payload = dashboard_overview.json()
+    assert overview_payload['requests'] >= 1
+    assert any(entry['path'] == '/v1/quote/{symbol}' for entry in overview_payload['topEndpoints'])
 
     class SubscriptionDeletedWebhook:
         @staticmethod
