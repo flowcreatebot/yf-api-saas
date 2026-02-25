@@ -13,7 +13,21 @@ import {
   Shell,
   Table,
 } from "./ui.js";
-import { createKey, getActivity, getKeys, getMetrics, getOverview, keyAction } from "./api.js";
+import {
+  clearStoredSession,
+  createKey,
+  getActivity,
+  getCustomerSession,
+  getKeys,
+  getMetrics,
+  getOverview,
+  keyAction,
+  loginCustomerSession,
+  registerCustomerSession,
+  logoutCustomerSession,
+  readStoredSession,
+  storeSession,
+} from "./api.js";
 
 const navItems = [
   { key: "overview", label: "Overview" },
@@ -148,6 +162,8 @@ const downloadActivityCsv = (events) => {
   URL.revokeObjectURL(url);
 };
 
+const isUnauthorizedError = (err) => err?.status === 401;
+
 function useHashRoute() {
   const readLocation = () => {
     const hash = window.location.hash.replace(/^#/, "");
@@ -191,7 +207,7 @@ function useHashRoute() {
   return [location, navigate];
 }
 
-function OverviewPage({ range, setRange }) {
+function OverviewPage({ range, setRange, onUnauthorized }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -203,7 +219,12 @@ function OverviewPage({ range, setRange }) {
         if (active) setData(payload);
       })
       .catch((err) => {
-        if (active) setError(err.message);
+        if (!active) return;
+        if (isUnauthorizedError(err)) {
+          onUnauthorized?.();
+          return;
+        }
+        setError(err.message);
       });
     return () => {
       active = false;
@@ -268,7 +289,7 @@ function OverviewPage({ range, setRange }) {
   );
 }
 
-function KeysPage({ search, onUpdateSearch }) {
+function KeysPage({ search, onUpdateSearch, onUnauthorized }) {
   const initialFilters = useMemo(() => readKeyFilters(search), [search]);
   const [keys, setKeys] = useState([]);
   const [label, setLabel] = useState("");
@@ -316,7 +337,13 @@ function KeysPage({ search, onUpdateSearch }) {
   const load = () =>
     getKeys()
       .then((payload) => setKeys(payload.keys))
-      .catch((err) => setError(err.message));
+      .catch((err) => {
+        if (isUnauthorizedError(err)) {
+          onUnauthorized?.();
+          return;
+        }
+        setError(err.message);
+      });
 
   useEffect(() => {
     load();
@@ -332,6 +359,10 @@ function KeysPage({ search, onUpdateSearch }) {
       setMessage("Key created.");
       await load();
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        onUnauthorized?.();
+        return;
+      }
       setError(err.message);
     }
   };
@@ -352,6 +383,10 @@ function KeysPage({ search, onUpdateSearch }) {
       setMessage(`Key ${action} complete.`);
       await load();
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        onUnauthorized?.();
+        return;
+      }
       setError(err.message);
     } finally {
       setPendingAction("");
@@ -544,7 +579,7 @@ function KeysPage({ search, onUpdateSearch }) {
   );
 }
 
-function MetricsPage({ range, setRange }) {
+function MetricsPage({ range, setRange, onUnauthorized }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -561,6 +596,10 @@ function MetricsPage({ range, setRange }) {
       })
       .catch((err) => {
         if (!active) return;
+        if (isUnauthorizedError(err)) {
+          onUnauthorized?.();
+          return;
+        }
         setError(err.message);
       })
       .finally(() => {
@@ -667,7 +706,7 @@ function MetricsPage({ range, setRange }) {
   );
 }
 
-function ActivityPage({ search, onUpdateSearch }) {
+function ActivityPage({ search, onUpdateSearch, onUnauthorized }) {
   const initialFilters = useMemo(() => readActivityFilters(search), [search]);
   const [events, setEvents] = useState([]);
   const [draftFilters, setDraftFilters] = useState(initialFilters);
@@ -701,6 +740,10 @@ function ActivityPage({ search, onUpdateSearch }) {
       })
       .catch((err) => {
         if (!active) return;
+        if (isUnauthorizedError(err)) {
+          onUnauthorized?.();
+          return;
+        }
         setError(err.message);
       })
       .finally(() => {
@@ -845,11 +888,95 @@ function ActivityPage({ search, onUpdateSearch }) {
   );
 }
 
+function LoginPage({ onLogin, onRegister, pending, error }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const submitLogin = async (event) => {
+    event.preventDefault();
+    await onLogin({ email, password });
+  };
+
+  const submitRegister = async () => {
+    await onRegister({ email, password });
+  };
+
+  return React.createElement(
+    "main",
+    { className: "content" },
+    React.createElement(
+      Card,
+      {
+        title: "Customer dashboard sign in",
+        meta: "Use your customer account email and password.",
+      },
+      React.createElement(
+        "form",
+        { onSubmit: submitLogin },
+        React.createElement(
+          FormRow,
+          null,
+          React.createElement(Input, {
+            type: "email",
+            placeholder: "you@company.com",
+            value: email,
+            onChange: (e) => setEmail(e.target.value),
+            required: true,
+          }),
+          React.createElement(Input, {
+            type: "password",
+            placeholder: "Password",
+            value: password,
+            onChange: (e) => setPassword(e.target.value),
+            minLength: 8,
+            required: true,
+          }),
+          React.createElement(Button, { type: "submit", tone: "primary", disabled: pending }, pending ? "Signing in…" : "Sign in"),
+          React.createElement(Button, { type: "button", tone: "muted", disabled: pending, onClick: submitRegister }, pending ? "Creating…" : "Create account")
+        )
+      ),
+      error ? React.createElement(Notice, { tone: "error" }, error) : null
+    )
+  );
+}
+
 function App() {
   const [location, navigate] = useHashRoute();
   const route = location.route;
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [range, setRange] = useState(() => normalizeRange(searchParams.get("range")) ?? DEFAULT_RANGE);
+  const [session, setSession] = useState(() => readStoredSession());
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authPending, setAuthPending] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  const clearAuth = () => {
+    clearStoredSession();
+    setSession(null);
+    setAuthError("Your customer dashboard session ended. Please sign in again.");
+  };
+
+  useEffect(() => {
+    const storedSession = readStoredSession();
+    if (!storedSession?.token) {
+      setAuthLoading(false);
+      return;
+    }
+
+    getCustomerSession()
+      .then((payload) => {
+        const nextSession = payload?.session;
+        if (nextSession?.token) {
+          storeSession(nextSession);
+          setSession(nextSession);
+        }
+      })
+      .catch(() => {
+        clearStoredSession();
+        setSession(null);
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
 
   useEffect(() => {
     if (!isAnalyticsRoute(route)) {
@@ -888,6 +1015,67 @@ function App() {
     navigate(nextRoute);
   };
 
+  const consumeAuthPayload = (payload) => {
+    const nextSession = payload?.session;
+    if (!nextSession?.token) {
+      throw new Error("Session login failed");
+    }
+    storeSession(nextSession);
+    setSession(nextSession);
+  };
+
+  const onLogin = async ({ email, password }) => {
+    setAuthPending(true);
+    setAuthError("");
+    try {
+      const payload = await loginCustomerSession(email, password);
+      consumeAuthPayload(payload);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthPending(false);
+      setAuthLoading(false);
+    }
+  };
+
+  const onRegister = async ({ email, password }) => {
+    setAuthPending(true);
+    setAuthError("");
+    try {
+      const payload = await registerCustomerSession(email, password);
+      consumeAuthPayload(payload);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthPending(false);
+      setAuthLoading(false);
+    }
+  };
+
+  const onLogout = async () => {
+    try {
+      await logoutCustomerSession();
+    } catch (_err) {
+      // Ignore logout transport errors and always clear local session state.
+    }
+    clearStoredSession();
+    setSession(null);
+    setAuthError("");
+  };
+
+  if (authLoading) {
+    return React.createElement("main", { className: "content" }, React.createElement(Notice, null, "Checking customer dashboard session…"));
+  }
+
+  if (!session?.token) {
+    return React.createElement(LoginPage, {
+      onLogin,
+      onRegister,
+      pending: authPending,
+      error: authError,
+    });
+  }
+
   const pageTitle = navItems.find((item) => item.key === route)?.label ?? "Overview";
 
   const page =
@@ -895,15 +1083,17 @@ function App() {
       ? React.createElement(KeysPage, {
           search: location.search,
           onUpdateSearch: (nextParams) => navigate("keys", nextParams),
+          onUnauthorized: clearAuth,
         })
       : route === "metrics"
-      ? React.createElement(MetricsPage, { range, setRange })
+      ? React.createElement(MetricsPage, { range, setRange, onUnauthorized: clearAuth })
       : route === "activity"
       ? React.createElement(ActivityPage, {
           search: location.search,
           onUpdateSearch: (nextParams) => navigate("activity", nextParams),
+          onUnauthorized: clearAuth,
         })
-      : React.createElement(OverviewPage, { range, setRange });
+      : React.createElement(OverviewPage, { range, setRange, onUnauthorized: clearAuth });
 
   return React.createElement(
     Shell,
@@ -913,6 +1103,14 @@ function App() {
       route,
       onNavigate,
     },
+    React.createElement(
+      Card,
+      {
+        title: "Customer session",
+        meta: `${session.email} · ${session.tenantId}`,
+      },
+      React.createElement(Button, { tone: "muted", onClick: onLogout }, "Sign out")
+    ),
     page
   );
 }

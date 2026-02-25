@@ -3,10 +3,15 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Lock
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
+
+from app.db import get_db, initialize_database
+from app.models import DashboardSession, User
+from app.security import hash_session_token, hash_password, verify_password
 
 from .dashboard_data import (
     ActivityStatus,
@@ -26,9 +31,14 @@ from .dashboard_data import (
 router = APIRouter(prefix="/dashboard/api", tags=["customer-dashboard"])
 
 
+class CustomerRegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
 class CustomerSessionLoginRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=254)
-    tenantId: str = Field(min_length=2, max_length=80)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
 
 
 @dataclass
@@ -36,12 +46,11 @@ class CustomerSessionContext:
     token: str
     email: str
     tenant_id: str
+    user_id: int
     expires_at: datetime
 
 
 _SESSION_TTL_HOURS = 8
-_session_lock = Lock()
-_session_store: dict[str, CustomerSessionContext] = {}
 
 
 def _session_payload(session: CustomerSessionContext) -> dict:
@@ -70,56 +79,137 @@ def _extract_session_token(
     return None
 
 
+def _customer_tenant_id(user_id: int) -> str:
+    return f"user-{user_id}"
+
+
+def _issue_session(db: Session, user: User) -> CustomerSessionContext:
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hash_session_token(raw_token)
+    expires_at = datetime.now(UTC) + timedelta(hours=_SESSION_TTL_HOURS)
+
+    session_record = DashboardSession(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
+
+    db.add(session_record)
+    try:
+        db.commit()
+    except OperationalError:
+        db.rollback()
+        initialize_database()
+        db.add(session_record)
+        db.commit()
+
+    return CustomerSessionContext(
+        token=raw_token,
+        email=user.email,
+        tenant_id=_customer_tenant_id(user.id),
+        user_id=user.id,
+        expires_at=expires_at,
+    )
+
+
 def require_customer_session(
     authorization: str | None = Header(default=None),
     x_customer_session: str | None = Header(default=None, alias="X-Customer-Session"),
+    db: Session = Depends(get_db),
 ) -> CustomerSessionContext:
     token = _extract_session_token(authorization=authorization, x_customer_session=x_customer_session)
     if not token:
         raise HTTPException(status_code=401, detail="Customer session required")
 
-    with _session_lock:
-        session = _session_store.get(token)
-        if not session:
-            raise HTTPException(status_code=401, detail="Invalid customer session")
+    token_hash = hash_session_token(token)
+    try:
+        session = (
+            db.query(DashboardSession)
+            .join(User, User.id == DashboardSession.user_id)
+            .filter(
+                DashboardSession.token_hash == token_hash,
+                DashboardSession.revoked_at.is_(None),
+            )
+            .first()
+        )
+    except OperationalError:
+        initialize_database()
+        session = None
 
-        if session.expires_at <= datetime.now(UTC):
-            del _session_store[token]
-            raise HTTPException(status_code=401, detail="Customer session expired")
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid customer session")
 
-    return session
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
+        session.revoked_at = datetime.now(UTC)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Customer session expired")
 
+    user = db.query(User).filter(User.id == session.user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid customer session")
 
-@router.post("/session/login")
-def customer_dashboard_login(payload: CustomerSessionLoginRequest):
-    token = secrets.token_urlsafe(24)
-    expires_at = datetime.now(UTC) + timedelta(hours=_SESSION_TTL_HOURS)
-
-    session = CustomerSessionContext(
+    return CustomerSessionContext(
         token=token,
-        email=payload.email.strip().lower(),
-        tenant_id=payload.tenantId.strip(),
+        email=user.email,
+        tenant_id=_customer_tenant_id(user.id),
+        user_id=user.id,
         expires_at=expires_at,
     )
 
-    with _session_lock:
-        _session_store[token] = session
 
+@router.post("/auth/register")
+def customer_register(payload: CustomerRegisterRequest, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email.lower()).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    user = User(
+        email=payload.email.lower(),
+        hashed_password=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    session = _issue_session(db, user)
     return {
         "ok": True,
-        "source": "customer-session-store",
+        "source": "customer-db-session",
+        "session": _session_payload(session),
+    }
+
+
+@router.post("/session/login")
+def customer_dashboard_login(payload: CustomerSessionLoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email.lower()).first()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    session = _issue_session(db, user)
+    return {
+        "ok": True,
+        "source": "customer-db-session",
         "session": _session_payload(session),
     }
 
 
 @router.post("/session/logout")
-def customer_dashboard_logout(session: CustomerSessionContext = Depends(require_customer_session)):
-    with _session_lock:
-        _session_store.pop(session.token, None)
+def customer_dashboard_logout(
+    session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
+):
+    token_hash = hash_session_token(session.token)
+    record = db.query(DashboardSession).filter(DashboardSession.token_hash == token_hash).first()
+    if record and record.revoked_at is None:
+        record.revoked_at = datetime.now(UTC)
+        db.commit()
 
     return {
         "ok": True,
-        "source": "customer-session-store",
+        "source": "customer-db-session",
     }
 
 
@@ -127,7 +217,7 @@ def customer_dashboard_logout(session: CustomerSessionContext = Depends(require_
 def customer_dashboard_me(session: CustomerSessionContext = Depends(require_customer_session)):
     return {
         "ok": True,
-        "source": "customer-session-store",
+        "source": "customer-db-session",
         "session": _session_payload(session),
     }
 
@@ -171,7 +261,13 @@ def get_customer_dashboard_activity(
     limit: int = Query(default=25, ge=1, le=100),
     session: CustomerSessionContext = Depends(require_customer_session),
 ):
-    payload = get_dashboard_activity(status=status, action=action, limit=limit)
+    payload = get_dashboard_activity(
+        tenant_id=session.tenant_id,
+        actor_email=session.email,
+        status=status,
+        action=action,
+        limit=limit,
+    )
     return {
         **payload,
         "source": "customer-placeholder",
@@ -184,7 +280,7 @@ def get_customer_dashboard_activity(
 
 @router.get("/keys")
 def get_customer_dashboard_keys(session: CustomerSessionContext = Depends(require_customer_session)):
-    payload = get_dashboard_keys()
+    payload = get_dashboard_keys(session.tenant_id)
     return {
         **payload,
         "source": "customer-mock-store",
@@ -200,7 +296,7 @@ def create_customer_dashboard_key(
     payload: CreateKeyRequest,
     session: CustomerSessionContext = Depends(require_customer_session),
 ):
-    response = create_dashboard_key(payload)
+    response = create_dashboard_key(session.tenant_id, payload)
     response["source"] = "customer-mock-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
@@ -214,7 +310,7 @@ def rotate_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
 ):
-    response = rotate_dashboard_key(key_id)
+    response = rotate_dashboard_key(session.tenant_id, key_id)
     response["source"] = "customer-mock-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
@@ -228,7 +324,7 @@ def revoke_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
 ):
-    response = revoke_dashboard_key(key_id)
+    response = revoke_dashboard_key(session.tenant_id, key_id)
     response["source"] = "customer-mock-store"
     response["scope"] = {
         "tenantId": session.tenant_id,
@@ -242,7 +338,7 @@ def activate_customer_dashboard_key(
     key_id: str,
     session: CustomerSessionContext = Depends(require_customer_session),
 ):
-    response = activate_dashboard_key(key_id)
+    response = activate_dashboard_key(session.tenant_id, key_id)
     response["source"] = "customer-mock-store"
     response["scope"] = {
         "tenantId": session.tenant_id,

@@ -93,6 +93,16 @@ def test_deployed_quote_rejects_invalid_api_key(deployed_client: httpx.Client):
 
 @pytest.mark.deployed
 @pytest.mark.critical
+def test_deployed_quote_auth_precedence_hides_symbol_validation(deployed_client: httpx.Client):
+    response = deployed_client.get("/v1/quote/@@@", headers={"x-api-key": "invalid-smoke-key"})
+    assert response.status_code == 401
+
+    payload = response.json()
+    assert payload.get("detail") == "Invalid API key"
+
+
+@pytest.mark.deployed
+@pytest.mark.critical
 def test_deployed_quote_with_real_key_if_provided(deployed_client: httpx.Client):
     api_key = _api_key()
     if not api_key:
@@ -126,6 +136,19 @@ def test_deployed_history_rejects_invalid_api_key(deployed_client: httpx.Client)
     )
     assert response.status_code == 401
     assert response.json().get("detail") == "Invalid API key"
+
+
+@pytest.mark.deployed
+@pytest.mark.critical
+def test_deployed_history_auth_precedence_hides_query_validation(deployed_client: httpx.Client):
+    response = deployed_client.get(
+        "/v1/history/@@@?period=not-a-real-period&interval=bogus",
+        headers={"x-api-key": "invalid-smoke-key"},
+    )
+    assert response.status_code == 401
+
+    payload = response.json()
+    assert payload.get("detail") == "Invalid API key"
 
 
 @pytest.mark.deployed
@@ -177,6 +200,19 @@ def test_deployed_bulk_quotes_rejects_invalid_api_key(deployed_client: httpx.Cli
 
 @pytest.mark.deployed
 @pytest.mark.critical
+def test_deployed_bulk_quotes_auth_precedence_hides_symbols_validation(deployed_client: httpx.Client):
+    response = deployed_client.get(
+        "/v1/quotes?symbols=@@@",
+        headers={"x-api-key": "invalid-smoke-key"},
+    )
+    assert response.status_code == 401
+
+    payload = response.json()
+    assert payload.get("detail") == "Invalid API key"
+
+
+@pytest.mark.deployed
+@pytest.mark.critical
 def test_deployed_bulk_quotes_with_real_key_if_provided(deployed_client: httpx.Client):
     api_key = _api_key()
     if not api_key:
@@ -215,6 +251,21 @@ def test_deployed_fundamentals_rejects_invalid_api_key(deployed_client: httpx.Cl
     response = deployed_client.get("/v1/fundamentals/AAPL", headers={"x-api-key": "invalid-smoke-key"})
     assert response.status_code == 401
     assert response.json().get("detail") == "Invalid API key"
+
+
+@pytest.mark.deployed
+@pytest.mark.critical
+def test_deployed_fundamentals_auth_precedence_hides_symbol_validation(
+    deployed_client: httpx.Client,
+):
+    response = deployed_client.get(
+        "/v1/fundamentals/@@@",
+        headers={"x-api-key": "invalid-smoke-key"},
+    )
+    assert response.status_code == 401
+
+    payload = response.json()
+    assert payload.get("detail") == "Invalid API key"
 
 
 @pytest.mark.deployed
@@ -344,18 +395,34 @@ def test_deployed_customer_session_login_me_logout_flow(
     assert unauth.status_code == 401
     assert unauth.json().get("detail") == "Customer session required"
 
+    email = "deployed-customer@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={
+            "email": email,
+            "password": password,
+        },
+    )
+
+    if register_response.status_code not in (200, 409):
+        raise AssertionError(
+            f"Unexpected registration status {register_response.status_code}: {register_response.text}"
+        )
+
     login_response = deployed_client.post(
         "/dashboard/api/session/login",
         json={
-            "email": "deployed-customer@example.com",
-            "tenantId": "smoke-tenant",
+            "email": email,
+            "password": password,
         },
     )
     assert login_response.status_code == 200
 
     login_payload = login_response.json()
     assert login_payload.get("ok") is True
-    assert login_payload.get("source") == "customer-session-store"
+    assert login_payload.get("source") == "customer-db-session"
     session = login_payload.get("session") or {}
     token = session.get("token")
     assert token
@@ -368,8 +435,8 @@ def test_deployed_customer_session_login_me_logout_flow(
 
     me_payload = me_response.json()
     assert me_payload.get("ok") is True
-    assert me_payload.get("source") == "customer-session-store"
-    assert (me_payload.get("session") or {}).get("email") == "deployed-customer@example.com"
+    assert me_payload.get("source") == "customer-db-session"
+    assert (me_payload.get("session") or {}).get("email") == email
 
     logout_response = deployed_client.post(
         "/dashboard/api/session/logout",
