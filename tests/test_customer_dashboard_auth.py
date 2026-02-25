@@ -220,3 +220,46 @@ def test_customer_dashboard_activity_is_tenant_scoped():
     actors_b = {event["actor"] for event in payload_b["events"]}
     assert email_a in actors_a
     assert email_b in actors_b
+
+
+def test_customer_dashboard_accepts_custom_session_header():
+    token = _register(_new_email())
+
+    response = client.get(
+        "/dashboard/api/session/me",
+        headers={"X-Customer-Session": token},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["session"]["token"] == token
+
+
+def test_customer_dashboard_frontend_login_flow_stays_authenticated_across_pages():
+    dashboard_shell = client.get("/dashboard")
+    assert dashboard_shell.status_code == 200
+    assert "<title>Y Finance Dashboard" in dashboard_shell.text
+
+    token = _register(_new_email())
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for path in [
+        "/dashboard/api/session/me",
+        "/dashboard/api/overview?range=24h",
+        "/dashboard/api/metrics?range=24h",
+        "/dashboard/api/activity?limit=10",
+        "/dashboard/api/keys",
+    ]:
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200
+
+    create_key = client.post(
+        "/dashboard/api/keys/create",
+        headers=headers,
+        json={"label": "Frontend Smoke", "env": "test"},
+    )
+    assert create_key.status_code == 200
+    key_id = create_key.json()["data"]["key"]["id"]
+
+    rotate = client.post(f"/dashboard/api/keys/{key_id}/rotate", headers=headers)
+    assert rotate.status_code == 200

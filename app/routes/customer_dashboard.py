@@ -83,10 +83,32 @@ def _customer_tenant_id(user_id: int) -> str:
     return f"user-{user_id}"
 
 
+def _normalize_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _revoke_expired_sessions(db: Session, *, user_id: int | None = None) -> None:
+    now = datetime.now(UTC)
+    query = db.query(DashboardSession).filter(
+        DashboardSession.revoked_at.is_(None),
+        DashboardSession.expires_at <= now,
+    )
+    if user_id is not None:
+        query = query.filter(DashboardSession.user_id == user_id)
+
+    for record in query.all():
+        record.revoked_at = now
+
+
+
 def _issue_session(db: Session, user: User) -> CustomerSessionContext:
     raw_token = secrets.token_urlsafe(32)
     token_hash = hash_session_token(raw_token)
     expires_at = datetime.now(UTC) + timedelta(hours=_SESSION_TTL_HOURS)
+
+    _revoke_expired_sessions(db, user_id=user.id)
 
     session_record = DashboardSession(
         user_id=user.id,
@@ -123,8 +145,8 @@ def require_customer_session(
 
     token_hash = hash_session_token(token)
     try:
-        session = (
-            db.query(DashboardSession)
+        lookup = (
+            db.query(DashboardSession, User)
             .join(User, User.id == DashboardSession.user_id)
             .filter(
                 DashboardSession.token_hash == token_hash,
@@ -134,22 +156,17 @@ def require_customer_session(
         )
     except OperationalError:
         initialize_database()
-        session = None
+        lookup = None
 
-    if not session:
+    if not lookup:
         raise HTTPException(status_code=401, detail="Invalid customer session")
 
-    expires_at = session.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
+    session, user = lookup
+    expires_at = _normalize_utc(session.expires_at)
     if expires_at <= datetime.now(UTC):
         session.revoked_at = datetime.now(UTC)
         db.commit()
         raise HTTPException(status_code=401, detail="Customer session expired")
-
-    user = db.query(User).filter(User.id == session.user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid customer session")
 
     return CustomerSessionContext(
         token=token,
