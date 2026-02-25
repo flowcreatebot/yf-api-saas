@@ -299,6 +299,83 @@ def test_customer_dashboard_activity_is_tenant_scoped():
     assert email_b in actors_b
 
 
+@pytest.mark.e2e
+def test_customer_dashboard_rotated_and_reactivated_key_controls_market_access(monkeypatch):
+    import app.routes.market as market
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {
+                "currency": "USD",
+                "exchange": "NASDAQ",
+                "lastPrice": 211.0,
+            }
+
+    monkeypatch.setattr(market.yf, "Ticker", DummyTicker)
+
+    email = _new_email()
+    token = _register(email)
+    _ensure_active_subscription(email)
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Lifecycle Probe", "env": "test"},
+    )
+    assert create_response.status_code == 200
+    create_payload = create_response.json()["data"]
+    key_id = create_payload["key"]["id"]
+    raw_key_v1 = create_payload["rawKey"]
+
+    first_market_call = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v1})
+    assert first_market_call.status_code == 200
+
+    rotate_response = client.post(
+        f"/dashboard/api/keys/{key_id}/rotate",
+        headers=auth_headers,
+    )
+    assert rotate_response.status_code == 200
+    raw_key_v2 = rotate_response.json()["data"]["rawKey"]
+    assert raw_key_v2 != raw_key_v1
+
+    old_key_after_rotate = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v1})
+    assert old_key_after_rotate.status_code == 401
+    assert old_key_after_rotate.json()["detail"] == "Invalid API key"
+
+    new_key_after_rotate = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert new_key_after_rotate.status_code == 200
+
+    revoke_response = client.post(
+        f"/dashboard/api/keys/{key_id}/revoke",
+        headers=auth_headers,
+    )
+    assert revoke_response.status_code == 200
+
+    revoked_market_call = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert revoked_market_call.status_code == 401
+    assert revoked_market_call.json()["detail"] == "Invalid API key"
+
+    activate_response = client.post(
+        f"/dashboard/api/keys/{key_id}/activate",
+        headers=auth_headers,
+    )
+    assert activate_response.status_code == 200
+
+    reactivated_market_call = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert reactivated_market_call.status_code == 200
+
+    overview_response = client.get("/dashboard/api/overview?range=24h", headers=auth_headers)
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.json()
+    assert overview_payload["requests"] >= 3
+
+
 def test_customer_dashboard_overview_and_metrics_use_real_usage_data(monkeypatch):
     import app.routes.market as market
 
