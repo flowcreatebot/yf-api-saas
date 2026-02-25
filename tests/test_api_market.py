@@ -138,6 +138,24 @@ class NonFiniteTicker:
         }
 
 
+class GetExplodes:
+    def get(self, _key):
+        raise RuntimeError('rate limited on field read')
+
+
+class InfoGetExplodesTicker:
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+
+    @property
+    def fast_info(self):
+        return GetExplodes()
+
+    @property
+    def info(self):
+        return GetExplodes()
+
+
 def _auth_headers():
     return {'x-api-key': settings.api_master_key}
 
@@ -295,3 +313,30 @@ def test_fundamentals_uses_stale_cache_on_upstream_failure(monkeypatch):
     stale = client.get('/v1/fundamentals/AAPL', headers=_auth_headers())
     assert stale.status_code == 200
     assert stale.json()['stale'] is True
+
+
+def test_quote_field_read_failure_maps_to_502(monkeypatch):
+    import app.routes.market as market
+
+    monkeypatch.setattr(market.yf, 'Ticker', InfoGetExplodesTicker)
+    r = client.get('/v1/quote/AAPL', headers=_auth_headers())
+    assert r.status_code == 502
+
+
+def test_fundamentals_field_read_failure_maps_to_502(monkeypatch):
+    import app.routes.market as market
+
+    monkeypatch.setattr(market.yf, 'Ticker', InfoGetExplodesTicker)
+    r = client.get('/v1/fundamentals/AAPL', headers=_auth_headers())
+    assert r.status_code == 502
+
+
+def test_quotes_field_read_failure_maps_to_upstream_error(monkeypatch):
+    import app.routes.market as market
+
+    monkeypatch.setattr(market.yf, 'Ticker', InfoGetExplodesTicker)
+    r = client.get('/v1/quotes?symbols=AAPL,MSFT', headers=_auth_headers())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['count'] == 2
+    assert all(item['ok'] is False and item['error'] == 'upstream_error' for item in body['data'])

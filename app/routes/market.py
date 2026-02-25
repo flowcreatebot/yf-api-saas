@@ -67,6 +67,13 @@ def _to_finite_int(value) -> int | None:
     return int(parsed)
 
 
+def _safe_info_get(info, key: str):
+    try:
+        return info.get(key)
+    except Exception as exc:
+        raise RuntimeError(f"failed to read upstream field '{key}': {exc}") from exc
+
+
 @router.get("/health")
 def health():
     return {"ok": True}
@@ -89,18 +96,25 @@ def quote(symbol: str, _: str = Depends(require_api_key)):
     if not info:
         raise HTTPException(status_code=404, detail="Symbol not found or unavailable")
 
-    payload = {
-        "symbol": symbol.upper(),
-        "currency": info.get("currency"),
-        "exchange": info.get("exchange"),
-        "last_price": _to_finite_float(info.get("lastPrice")),
-        "open": _to_finite_float(info.get("open")),
-        "day_high": _to_finite_float(info.get("dayHigh")),
-        "day_low": _to_finite_float(info.get("dayLow")),
-        "previous_close": _to_finite_float(info.get("previousClose")),
-        "volume": _to_finite_int(info.get("lastVolume")),
-        "market_cap": _to_finite_int(info.get("marketCap")),
-    }
+    try:
+        payload = {
+            "symbol": symbol.upper(),
+            "currency": _safe_info_get(info, "currency"),
+            "exchange": _safe_info_get(info, "exchange"),
+            "last_price": _to_finite_float(_safe_info_get(info, "lastPrice")),
+            "open": _to_finite_float(_safe_info_get(info, "open")),
+            "day_high": _to_finite_float(_safe_info_get(info, "dayHigh")),
+            "day_low": _to_finite_float(_safe_info_get(info, "dayLow")),
+            "previous_close": _to_finite_float(_safe_info_get(info, "previousClose")),
+            "volume": _to_finite_int(_safe_info_get(info, "lastVolume")),
+            "market_cap": _to_finite_int(_safe_info_get(info, "marketCap")),
+        }
+    except Exception as exc:
+        cached, is_stale = _cache_get(cache_key)
+        if cached is not None and is_stale:
+            return {**cached, "stale": True}
+        raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
+
     _cache_set(cache_key, payload)
     return {**payload, "stale": False}
 
@@ -187,17 +201,26 @@ def quotes(
             results.append({"symbol": symbol, "ok": False, "error": "unavailable"})
             continue
 
-        payload = {
-            "symbol": symbol,
-            "currency": info.get("currency"),
-            "last_price": _to_finite_float(info.get("lastPrice")),
-            "open": _to_finite_float(info.get("open")),
-            "day_high": _to_finite_float(info.get("dayHigh")),
-            "day_low": _to_finite_float(info.get("dayLow")),
-            "previous_close": _to_finite_float(info.get("previousClose")),
-            "volume": _to_finite_int(info.get("lastVolume")),
-            "market_cap": _to_finite_int(info.get("marketCap")),
-        }
+        try:
+            payload = {
+                "symbol": symbol,
+                "currency": _safe_info_get(info, "currency"),
+                "last_price": _to_finite_float(_safe_info_get(info, "lastPrice")),
+                "open": _to_finite_float(_safe_info_get(info, "open")),
+                "day_high": _to_finite_float(_safe_info_get(info, "dayHigh")),
+                "day_low": _to_finite_float(_safe_info_get(info, "dayLow")),
+                "previous_close": _to_finite_float(_safe_info_get(info, "previousClose")),
+                "volume": _to_finite_int(_safe_info_get(info, "lastVolume")),
+                "market_cap": _to_finite_int(_safe_info_get(info, "marketCap")),
+            }
+        except Exception:
+            cached, is_stale = _cache_get(cache_key)
+            if cached is not None and is_stale:
+                results.append({**cached, "ok": True, "stale": True})
+            else:
+                results.append({"symbol": symbol, "ok": False, "error": "upstream_error"})
+            continue
+
         _cache_set(cache_key, payload)
         results.append({**payload, "ok": True, "stale": False})
 
@@ -220,20 +243,27 @@ def fundamentals(symbol: str, _: str = Depends(require_api_key)):
     if not info:
         raise HTTPException(status_code=404, detail="Fundamentals unavailable")
 
-    payload = {
-        "symbol": symbol.upper(),
-        "long_name": info.get("longName"),
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "website": info.get("website"),
-        "trailing_pe": _to_finite_float(info.get("trailingPE")),
-        "forward_pe": _to_finite_float(info.get("forwardPE")),
-        "price_to_book": _to_finite_float(info.get("priceToBook")),
-        "dividend_yield": _to_finite_float(info.get("dividendYield")),
-        "beta": _to_finite_float(info.get("beta")),
-        "fifty_two_week_high": _to_finite_float(info.get("fiftyTwoWeekHigh")),
-        "fifty_two_week_low": _to_finite_float(info.get("fiftyTwoWeekLow")),
-    }
+    try:
+        payload = {
+            "symbol": symbol.upper(),
+            "long_name": _safe_info_get(info, "longName"),
+            "sector": _safe_info_get(info, "sector"),
+            "industry": _safe_info_get(info, "industry"),
+            "website": _safe_info_get(info, "website"),
+            "trailing_pe": _to_finite_float(_safe_info_get(info, "trailingPE")),
+            "forward_pe": _to_finite_float(_safe_info_get(info, "forwardPE")),
+            "price_to_book": _to_finite_float(_safe_info_get(info, "priceToBook")),
+            "dividend_yield": _to_finite_float(_safe_info_get(info, "dividendYield")),
+            "beta": _to_finite_float(_safe_info_get(info, "beta")),
+            "fifty_two_week_high": _to_finite_float(_safe_info_get(info, "fiftyTwoWeekHigh")),
+            "fifty_two_week_low": _to_finite_float(_safe_info_get(info, "fiftyTwoWeekLow")),
+        }
+    except Exception as exc:
+        cached, is_stale = _cache_get(cache_key)
+        if cached is not None and is_stale:
+            return {**cached, "stale": True}
+        raise HTTPException(status_code=502, detail=f"Upstream provider error: {exc}")
+
     _cache_set(cache_key, payload)
 
     return {**payload, "stale": False}
