@@ -1,30 +1,35 @@
-import hmac
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
-from fastapi import Header, HTTPException, status
-from .config import settings
-
-
-def _allowed_keys() -> list[str]:
-    keys = [settings.api_master_key]
-    if settings.api_valid_keys.strip():
-        keys.extend([k.strip() for k in settings.api_valid_keys.split(",") if k.strip()])
-    # de-duplicate while preserving order
-    out: list[str] = []
-    seen: set[str] = set()
-    for k in keys:
-        if k not in seen:
-            out.append(k)
-            seen.add(k)
-    return out
+from .db import get_db, initialize_database, sync_configured_api_keys
+from .models import APIKey
+from .security import hash_api_key
 
 
-async def require_api_key(x_api_key: str | None = Header(default=None)) -> str:
+def require_api_key(
+    x_api_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> str:
     if not x_api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
 
-    # Constant-time compare against allowed keys.
-    for key in _allowed_keys():
-        if hmac.compare_digest(x_api_key, key):
-            return x_api_key
+    key_hash = hash_api_key(x_api_key)
+    try:
+        api_key = (
+            db.query(APIKey)
+            .filter(APIKey.key_hash == key_hash, APIKey.status == "active")
+            .first()
+        )
+    except OperationalError:
+        initialize_database()
+        sync_configured_api_keys()
+        api_key = (
+            db.query(APIKey)
+            .filter(APIKey.key_hash == key_hash, APIKey.status == "active")
+            .first()
+        )
+    if api_key is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    return x_api_key

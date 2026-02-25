@@ -1,80 +1,153 @@
-# PROJECT_YFINANCE_SAAS_PLAN
+# YF API SaaS — Phased Build Plan
 
-## 1) Current state snapshot
-- API MVP is live in repo scope: quote, history, batch quotes, fundamentals, auth, billing endpoints, OpenAPI docs.
-- Test baseline is healthy: `30 passed` (latest report: `reports/test_report_2026-02-24_13-29-33.txt`).
-- Container/release hygiene exists: Dockerfile, compose healthchecks, CI smoke runbook, deployment smoke script.
-- Docs are present (README + API guide), but customer onboarding and conversion flow are still lightweight.
-- Billing webhook is acknowledged but production-grade subscription state persistence/ops controls are not fully closed.
+## Product
 
-## 2) Shipping priorities (match CRON_BRIEF order)
-1. **API correctness + stability**
-   - Tighten response/error contract consistency; expand edge-case regression coverage per endpoint.
-2. **Auth/billing safety**
-   - Harden auth/billing guardrails, webhook handling expectations, and failure-mode behavior.
-3. **Customer docs quality**
-   - Improve quickstart, endpoint examples, no-code recipes, and error-handling playbooks.
-   - Add interactive API explorer UX (API key authorize + prebuilt try-it requests) as a planned docs milestone.
-4. **Deployment + reliability**
-   - Standardize smoke/deploy checks, runbooks, and alerting signals.
-5. **Conversion improvements (landing + customer journey)**
-   - Clarify value prop, CTA flow, pricing/plan copy, and trial-to-paid path.
-6. **Internal dashboard + API key self-serve portal**
-   - Define MVP scope and sequence after core reliability/docs are stable.
+Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get an API key, use it in their automations. They need: a way to sign up and pay, a dashboard to manage their keys and see usage, good API docs, and a sales page that explains the product.
 
-## 3) 2-week milestone plan (concrete deliverables)
-### Week 1 — Reliability + safety foundation
-- **Builder**: close top correctness gaps from test/backlog review; normalize error payload behavior across all public endpoints.
-- **QA**: add targeted regression matrix for invalid symbol/period/interval, auth failures, and provider transient failures.
-- **Docs**: publish "first 15 minutes" onboarding path + status-code troubleshooting guide.
-- **Ops**: enforce container health smoke in CI + validate manual deploy smoke checklist against current env.
-- **Deliverables**:
-  - Updated test suite + green CI
-  - Error contract checklist (implemented + validated)
-  - Onboarding/troubleshooting docs merged
-  - Smoke runbook verified and current
+## Rules
 
-### Week 2 — Customer readiness + go-to-market baseline
-- **Builder**: implement highest-impact non-breaking improvements for billing/auth safety and operational observability hooks.
-- **QA**: execute end-to-end happy path + failure-path validation (API + billing endpoints).
-- **Docs**: refresh landing/customer journey copy to reduce setup friction and make CTA path explicit.
-- **Ops**: define deployment rollback criteria and alert thresholds for health/test regressions.
-- **Deliverables**:
-  - Billing/auth hardening checklist completed
-  - E2E validation report published
-  - Updated landing + customer flow copy shipped
-  - Rollback + alert criteria documented
+- Phases are strictly ordered. Complete one before starting the next.
+- "Done" means working code with passing tests, not docs or plans.
+- Each phase's "done when" criteria must all be met before moving on.
 
-## 4) Definition of done per lane
-- **Builder DoD**
-  - Changes are scoped to assigned feature/fix, backward-compatible for documented API behavior.
-  - Tests added/updated for new or changed behavior.
-  - No deployment/process/docs-only tasks mixed into builder PRs.
-- **QA DoD**
-  - Test plan includes happy path + edge/failure cases for touched area.
-  - Regressions reproducible with clear pass/fail evidence and report artifact.
-  - No net drop in coverage of critical endpoints.
-- **Docs DoD**
-  - Steps are runnable by a new user without implicit context.
-  - Examples validated against current API behavior and status codes.
-  - Copy is concise, consistent, and mapped to target user journey.
-- **Ops DoD**
-  - Smoke checks/runbooks execute as documented.
-  - Deploy/rollback criteria are explicit and testable.
-  - Alerting/operational signals are actionable (clear owner + threshold).
+---
 
-## 5) Risk register + mitigations
-- **Upstream market-data instability** → Mitigation: defensive error mapping, retries only where safe, clear 502 handling docs.
-- **Billing/webhook misconfiguration in production** → Mitigation: preflight config checklist, webhook signature validation tests, staged verification before release.
-- **Spec drift between docs and API behavior** → Mitigation: docs validation against live/local test calls each cycle.
-- **Silent deploy regressions** → Mitigation: mandatory smoke gate + rollback trigger rules.
-- **Scope sprawl across lanes** → Mitigation: strict role boundaries and main-coordinator re-assignment when cross-lane work appears.
+## Phase 1: Database foundation
 
-## 6) Next cron-cycle task queue (small, actionable)
-1. Build a short endpoint-by-endpoint error-contract checklist and mark current pass/fail.
-2. Add/verify regression tests for auth missing/invalid key + malformed market-data query params.
-3. Update docs with a single "new user quickstart" flow (env setup → first successful call → common errors).
-4. Run and record container smoke check result in latest cycle notes.
-5. Create a billing safety checklist (required env vars, webhook signature, expected failure responses).
-6. Propose minimal metrics/alerts table for `/v1/health` and test-status regression visibility.
-7. Implement docs explorer upgrade plan (Swagger/Scalar-style key authorize + curated example requests).
+**Status: COMPLETE**
+
+### Work
+
+- Wire SQLAlchemy to Postgres (connection already provisioned via `DATABASE_URL` on Render)
+- Create models:
+  - `User` — email, hashed_password, stripe_customer_id, created_at
+  - `APIKey` — key_hash, user_id, name, status, created_at, last_used_at
+  - `Subscription` — user_id, stripe_subscription_id, status, plan, current_period_end
+  - `UsageLog` — api_key_id, endpoint, status_code, response_ms, created_at
+- Alembic for migrations
+- Replace the in-memory API key check in `auth.py` to validate against the DB
+
+### Done when
+
+- [ ] `pytest` passes
+- [ ] App connects to Postgres on startup
+- [ ] API key auth validates against the DB (not in-memory dict)
+- [ ] Migrations run clean (`alembic upgrade head` succeeds)
+
+---
+
+## Phase 2: Real user auth
+
+**Status: IN PROGRESS**
+
+### Work
+
+- Registration endpoint: email + password → bcrypt hash → store User → return session token
+- Login endpoint: email + password → verify hash → return session token
+- Sessions stored in DB (or Redis if available), not in-memory dict
+- Password reset flow (stretch — can defer if it blocks progress)
+- Update dashboard frontend `api.js` to store and send session token on every request
+
+### Done when
+
+- [ ] Can register a new user via API
+- [ ] Can log in and receive a session token
+- [ ] Session token grants access to dashboard endpoints
+- [ ] Frontend login flow works end-to-end in browser (no 401s on authenticated pages)
+
+---
+
+## Phase 3: Billing completion (Stripe end-to-end)
+
+**Status: NOT STARTED**
+
+### Work
+
+- Webhook handler processes `checkout.session.completed` → creates Subscription record + provisions first API key
+- Webhook handles `customer.subscription.updated` and `customer.subscription.deleted` → updates Subscription status
+- Checkout endpoint links to authenticated user (attaches `stripe_customer_id`)
+- API key auth checks subscription status (active subscription required)
+- Plans endpoint reads from config, not hardcoded dict
+
+### Done when
+
+- [ ] Full flow works: register → checkout → Stripe test payment → webhook fires → Subscription created → API key provisioned
+- [ ] User can call market endpoints with their provisioned key
+- [ ] Subscription cancellation (via webhook) revokes API access
+
+---
+
+## Phase 4: Dashboard goes real
+
+**Status: NOT STARTED**
+
+### Work
+
+- Replace all mock data in `dashboard_data.py` with real DB queries
+- Overview: real key count, real usage stats from UsageLog
+- API keys page: real CRUD against APIKey table
+- Activity: real usage logs
+- Metrics: real request counts and latency from UsageLog
+
+### Done when
+
+- [ ] Dashboard shows real data from the database (no hardcoded mock dicts)
+- [ ] Creating a key in the dashboard creates a real APIKey record
+- [ ] Revoking a key in the dashboard changes its status in the DB
+- [ ] Usage numbers change when the API is actually called
+
+---
+
+## Phase 5: Sales page + API docs
+
+**Status: NOT STARTED**
+
+### Work
+
+- Mount landing page at `/` (currently redirects to /docs)
+- Clean up `web/landing.html` — real CTA pointing to registration/checkout
+- Replace default Swagger UI with Scalar (or similar) for interactive API docs at `/docs`
+- Add "try it" examples with API key authorize flow
+- Add no-code quickstart (Zapier webhook URL, Make HTTP module setup)
+
+### Done when
+
+- [ ] Visiting root URL `/` shows a sales page with signup CTA
+- [ ] `/docs` shows interactive API explorer
+- [ ] User can authorize with their API key in the docs UI and make real calls
+
+---
+
+## Phase 6: Rate limiting + usage tracking
+
+**Status: NOT STARTED**
+
+### Work
+
+- Wire `slowapi` (already in requirements) to rate limit per API key
+- Log every API call to UsageLog table
+- Dashboard metrics pull from real usage data
+
+### Done when
+
+- [ ] Hitting rate limit returns 429
+- [ ] Every API call creates a UsageLog record
+- [ ] Usage shows up in dashboard within reasonable delay
+
+---
+
+## Phase 7: E2E testing
+
+**Status: NOT STARTED**
+
+### Work
+
+- Tests cover the real flows: register → pay → get key → call API → see usage in dashboard
+- Deployed smoke tests validate actual deployed behavior
+- Remove or replace tests that only test mock data
+
+### Done when
+
+- [ ] `pytest` covers the critical user journey end-to-end
+- [ ] Smoke tests run against deployed env and validate real flows
+- [ ] No tests exist that only validate mock/hardcoded data

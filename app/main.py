@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .db import initialize_database, sync_configured_api_keys, verify_database_connection
 from .routes.billing import router as billing_router
 from .routes.customer_dashboard import router as customer_dashboard_router
 from .routes.market import router as market_router
@@ -38,6 +39,13 @@ if CUSTOMER_DASHBOARD_DIR.exists():
         StaticFiles(directory=str(CUSTOMER_DASHBOARD_DIR), html=True),
         name="customer-dashboard",
     )
+
+
+@app.on_event("startup")
+def startup() -> None:
+    verify_database_connection()
+    initialize_database()
+    sync_configured_api_keys()
 
 
 @app.exception_handler(RequestValidationError)

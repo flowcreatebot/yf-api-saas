@@ -35,8 +35,10 @@ def test_protected_endpoints_reject_wrong_api_key(endpoint):
     assert r.json()['detail'] == 'Invalid API key'
 
 
-def test_quote_accepts_additional_valid_key(monkeypatch):
-    from app.config import settings
+def test_quote_accepts_database_backed_api_key(monkeypatch):
+    from app.db import SessionLocal
+    from app.models import APIKey, User
+    from app.security import hash_api_key
     import app.routes.market as market
 
     class DummyTicker:
@@ -47,11 +49,20 @@ def test_quote_accepts_additional_valid_key(monkeypatch):
         def fast_info(self):
             return {'lastPrice': 123.45}
 
-    monkeypatch.setattr(settings, 'api_valid_keys', 'alpha,beta,gamma')
     monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == 'test-auth@yfapi.local').first()
+        if user is None:
+            user = User(email='test-auth@yfapi.local', hashed_password='!')
+            db.add(user)
+            db.flush()
+
+        key_hash = hash_api_key('beta')
+        existing = db.query(APIKey).filter(APIKey.key_hash == key_hash).first()
+        if existing is None:
+            db.add(APIKey(key_hash=key_hash, user_id=user.id, name='test-beta', status='active'))
+            db.commit()
 
     r = client.get('/v1/quote/AAPL', headers={'x-api-key': 'beta'})
     assert r.status_code == 200
-
-    # reset for test isolation
-    monkeypatch.setattr(settings, 'api_valid_keys', '')
