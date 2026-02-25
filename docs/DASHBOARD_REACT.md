@@ -1,9 +1,14 @@
 # Internal Dashboard Migration (modern UI slice)
 
-This repo serves two dashboard shells in parallel during migration:
+Dashboard static shells are optional in this repo snapshot.
 
+When static bundles are present:
 - Primary dashboard: `/internal/dashboard/`
 - Legacy compatibility shell: `/internal/dashboard-legacy/`
+
+When static bundles are absent:
+- `/internal` intentionally falls back to `/docs`
+- Internal dashboard APIs under `/internal/api/*` remain active and tested
 
 ## Local dev
 
