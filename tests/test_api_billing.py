@@ -456,3 +456,170 @@ def test_webhook_subscription_deleted_marks_subscription_canceled(monkeypatch):
         updated = db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
         assert updated is not None
         assert updated.status == 'canceled'
+
+
+def test_webhook_checkout_completed_unpaid_does_not_provision_key(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'customer': f"cus_unpaid_{uuid4().hex[:8]}",
+                        'subscription': f"sub_unpaid_{uuid4().hex[:8]}",
+                        'customer_email': email,
+                        'payment_status': 'unpaid',
+                        'metadata': {'user_id': str(user_id)},
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert response.status_code == 200
+    assert response.json()['handled'] is True
+    assert response.json()['provisioned_key'] is False
+
+    with SessionLocal() as db:
+        subscription = db.query(Subscription).filter(Subscription.user_id == user_id).order_by(Subscription.id.desc()).first()
+        assert subscription is not None
+        assert subscription.status == 'incomplete'
+
+        key = db.query(APIKey).filter(APIKey.user_id == user_id).first()
+        assert key is None
+
+
+def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_access(monkeypatch):
+    import app.routes.billing as billing
+    import app.routes.market as market
+
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    customer_id = f"cus_flow_{uuid4().hex[:10]}"
+    subscription_id = f"sub_flow_{uuid4().hex[:10]}"
+
+    class DummyCustomer:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': customer_id}
+
+    class DummyCheckoutSession:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': 'cs_flow_123', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {'lastPrice': 321.09}
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    monkeypatch.setattr(billing.stripe, 'Customer', DummyCustomer)
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummyCheckoutSession)
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    provisioned_key_suffix = f"flowtoken_{uuid4().hex}"
+
+    email, session_token = _register_customer()
+
+    checkout_response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {session_token}'},
+        json={
+            'email': email,
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(billing.secrets, 'token_urlsafe', lambda size: provisioned_key_suffix)
+
+    class CheckoutCompletedWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'customer': customer_id,
+                        'subscription': subscription_id,
+                        'customer_email': email,
+                        'payment_status': 'paid',
+                        'metadata': {'user_id': str(user_id)},
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', CheckoutCompletedWebhook)
+
+    webhook_paid_response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert webhook_paid_response.status_code == 200
+    assert webhook_paid_response.json()['handled'] is True
+    assert webhook_paid_response.json()['provisioned_key'] is True
+
+    raw_key = f"yf_live_{provisioned_key_suffix}"
+
+    market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert market_response.status_code == 200
+
+    class SubscriptionDeletedWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.deleted',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'canceled',
+                        'current_period_end': 1765000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', SubscriptionDeletedWebhook)
+
+    webhook_deleted_response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert webhook_deleted_response.status_code == 200
+    assert webhook_deleted_response.json()['handled'] is True
+
+    blocked_market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert blocked_market_response.status_code == 403
+    assert blocked_market_response.json()['detail'] == 'Subscription inactive'
+
+    with SessionLocal() as db:
+        subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
+        assert subscription is not None
+        assert subscription.status == 'canceled'
+
+        api_key = db.query(APIKey).filter(APIKey.user_id == user_id).first()
+        assert api_key is not None

@@ -298,7 +298,8 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
                 current_period_end=None,
                 db=db,
             )
-            provisioned_key = _provision_first_api_key(user, db)
+            if status in _ACTIVE_SUBSCRIPTION_STATUSES:
+                provisioned_key = _provision_first_api_key(user, db)
             handled = True
 
     elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
