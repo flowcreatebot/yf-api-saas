@@ -67,3 +67,13 @@ def root():
 @app.get("/customer", include_in_schema=False)
 def customer_root_legacy_redirect():
     return RedirectResponse(url="/dashboard")
+
+
+@app.get("/internal", include_in_schema=False)
+def internal_root_legacy_redirect():
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/internal/{path:path}", include_in_schema=False)
+def internal_path_legacy_redirect(path: str):
+    return RedirectResponse(url=f"/dashboard/{path}")

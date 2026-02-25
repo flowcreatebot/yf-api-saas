@@ -38,7 +38,7 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ## Phase 2: Real user auth
 
-**Status: IN PROGRESS**
+**Status: COMPLETE**
 
 ### Work
 
@@ -50,16 +50,16 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ### Done when
 
-- [ ] Can register a new user via API
-- [ ] Can log in and receive a session token
-- [ ] Session token grants access to dashboard endpoints
-- [ ] Frontend login flow works end-to-end in browser (no 401s on authenticated pages)
+- [x] Can register a new user via API
+- [x] Can log in and receive a session token
+- [x] Session token grants access to dashboard endpoints
+- [x] Frontend login flow works end-to-end in browser (no 401s on authenticated pages)
 
 ---
 
 ## Phase 3: Billing completion (Stripe end-to-end)
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ### Work
 

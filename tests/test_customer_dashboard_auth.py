@@ -235,6 +235,20 @@ def test_customer_dashboard_accepts_custom_session_header():
     assert payload["session"]["token"] == token
 
 
+def test_customer_dashboard_legacy_internal_routes_redirect_to_dashboard_shell():
+    root_redirect = client.get("/internal", follow_redirects=False)
+    assert root_redirect.status_code in (301, 302, 307, 308)
+    assert root_redirect.headers["location"] == "/dashboard"
+
+    shell_redirect = client.get("/internal/", follow_redirects=False)
+    assert shell_redirect.status_code in (301, 302, 307, 308)
+    assert shell_redirect.headers["location"] == "/dashboard/"
+
+    shell = client.get("/internal/")
+    assert shell.status_code == 200
+    assert "<title>Y Finance Dashboard" in shell.text
+
+
 def test_customer_dashboard_frontend_login_flow_stays_authenticated_across_pages():
     dashboard_shell = client.get("/dashboard")
     assert dashboard_shell.status_code == 200
