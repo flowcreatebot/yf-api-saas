@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,7 @@ def _has_active_subscription(db: Session, user_id: int) -> bool:
 
 
 def require_api_key(
+    request: Request,
     x_api_key: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> str:
@@ -56,5 +57,7 @@ def require_api_key(
 
     api_key.last_used_at = datetime.now(UTC)
     db.commit()
+
+    request.state.authenticated_api_key_id = api_key.id
 
     return x_api_key

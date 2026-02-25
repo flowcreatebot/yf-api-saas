@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -8,7 +9,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
-from .db import initialize_database, sync_configured_api_keys, verify_database_connection
+from .db import SessionLocal, initialize_database, sync_configured_api_keys, verify_database_connection
+from .models import UsageLog
 from .routes.billing import router as billing_router
 from .routes.customer_dashboard import router as customer_dashboard_router
 from .routes.market import router as market_router
@@ -26,6 +28,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def record_usage_logs(request: Request, call_next):
+    is_market_call = request.url.path.startswith("/v1/") and request.url.path != "/v1/health"
+    if not is_market_call:
+        return await call_next(request)
+
+    started = time.perf_counter()
+    status_code = 500
+    response = None
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        api_key_id = getattr(request.state, "authenticated_api_key_id", None)
+        if api_key_id:
+            elapsed_ms = max(1, int((time.perf_counter() - started) * 1000))
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", None)
+            endpoint = route_path if isinstance(route_path, str) else request.url.path
+
+            with SessionLocal() as db:
+                db.add(
+                    UsageLog(
+                        api_key_id=api_key_id,
+                        endpoint=endpoint,
+                        status_code=status_code,
+                        response_ms=elapsed_ms,
+                    )
+                )
+                db.commit()
+
 
 app.include_router(market_router)
 app.include_router(billing_router)

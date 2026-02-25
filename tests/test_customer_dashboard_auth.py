@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import APIKey, User
+from app.models import APIKey, Subscription, User
 
 client = TestClient(app)
 pytestmark = [pytest.mark.integration, pytest.mark.critical]
@@ -37,6 +37,25 @@ def _login(email: str, password: str = "Passw0rd!") -> str:
 
 def _new_email() -> str:
     return f"user-{uuid4().hex[:10]}@example.com"
+
+
+def _ensure_active_subscription(email: str):
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        subscription = db.query(Subscription).filter(Subscription.user_id == user.id).first()
+        if subscription is None:
+            db.add(
+                Subscription(
+                    user_id=user.id,
+                    stripe_subscription_id=f"sub_test_{user.id}",
+                    status="active",
+                    plan="starter-monthly",
+                )
+            )
+        else:
+            subscription.status = "active"
+        db.commit()
 
 
 @pytest.mark.parametrize(
@@ -115,7 +134,7 @@ def test_customer_dashboard_scoped_response_includes_tenant_context():
     assert response.status_code == 200
 
     payload = response.json()
-    assert payload["source"] == "customer-placeholder"
+    assert payload["source"] == "customer-db-store"
     assert payload["range"] == "7d"
     assert payload["scope"]["tenantId"].startswith("user-")
     assert payload["scope"]["email"] == email
@@ -239,6 +258,19 @@ def test_customer_dashboard_activity_is_tenant_scoped():
     token_a = _register(email_a)
     token_b = _register(email_b)
 
+    create_a = client.post(
+        "/dashboard/api/keys/create",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"label": "Tenant A", "env": "test"},
+    )
+    create_b = client.post(
+        "/dashboard/api/keys/create",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"label": "Tenant B", "env": "test"},
+    )
+    assert create_a.status_code == 200
+    assert create_b.status_code == 200
+
     activity_a = client.get(
         "/dashboard/api/activity",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -257,17 +289,116 @@ def test_customer_dashboard_activity_is_tenant_scoped():
     targets_a = {event["target"] for event in payload_a["events"]}
     targets_b = {event["target"] for event in payload_b["events"]}
 
-    tenant_a = payload_a["scope"]["tenantId"]
-    tenant_b = payload_b["scope"]["tenantId"]
-
-    assert all(tenant_a in target for target in targets_a)
-    assert all(tenant_b in target for target in targets_b)
+    assert payload_a["scope"]["tenantId"].startswith("user-")
+    assert payload_b["scope"]["tenantId"].startswith("user-")
     assert targets_a.isdisjoint(targets_b)
 
     actors_a = {event["actor"] for event in payload_a["events"]}
     actors_b = {event["actor"] for event in payload_b["events"]}
     assert email_a in actors_a
     assert email_b in actors_b
+
+
+def test_customer_dashboard_overview_and_metrics_use_real_usage_data(monkeypatch):
+    import app.routes.market as market
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {
+                "currency": "USD",
+                "exchange": "NASDAQ",
+                "lastPrice": 123.45,
+                "open": 121.0,
+                "dayHigh": 124.0,
+                "dayLow": 120.5,
+                "previousClose": 122.5,
+                "lastVolume": 1000000,
+                "marketCap": 1000000000,
+            }
+
+    monkeypatch.setattr(market.yf, "Ticker", DummyTicker)
+
+    email = _new_email()
+    token = _register(email)
+    _ensure_active_subscription(email)
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = client.post(
+        "/dashboard/api/keys/create",
+        headers=headers,
+        json={"label": "Usage Probe", "env": "test"},
+    )
+    assert created.status_code == 200
+    raw_key = created.json()["data"]["rawKey"]
+
+    before = client.get("/dashboard/api/overview?range=24h", headers=headers)
+    assert before.status_code == 200
+    before_payload = before.json()
+    assert before_payload["requests"] == 0
+
+    call_quote = client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert call_quote.status_code == 200
+
+    after_overview = client.get("/dashboard/api/overview?range=24h", headers=headers)
+    assert after_overview.status_code == 200
+    overview_payload = after_overview.json()
+    assert overview_payload["source"] == "customer-db-store"
+    assert overview_payload["requests"] >= 1
+    assert overview_payload["totalKeys"] >= 1
+    assert any(entry["path"] == "/v1/quote/{symbol}" for entry in overview_payload["topEndpoints"])
+
+    metrics = client.get("/dashboard/api/metrics?range=24h", headers=headers)
+    assert metrics.status_code == 200
+    metrics_payload = metrics.json()
+    assert metrics_payload["source"] == "customer-db-store"
+    assert metrics_payload["summary"]["requests"] >= 1
+    assert any(entry["path"] == "/v1/quote/{symbol}" for entry in metrics_payload["topEndpoints"])
+
+
+def test_customer_dashboard_activity_uses_db_events(monkeypatch):
+    import app.routes.market as market
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {
+                "currency": "USD",
+                "exchange": "NASDAQ",
+                "lastPrice": 99.5,
+            }
+
+    monkeypatch.setattr(market.yf, "Ticker", DummyTicker)
+
+    email = _new_email()
+    token = _register(email)
+    _ensure_active_subscription(email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = client.post(
+        "/dashboard/api/keys/create",
+        headers=headers,
+        json={"label": "Activity Probe", "env": "test"},
+    )
+    assert created.status_code == 200
+    raw_key = created.json()["data"]["rawKey"]
+
+    quote = client.get("/v1/quote/MSFT", headers={"x-api-key": raw_key})
+    assert quote.status_code == 200
+
+    activity = client.get("/dashboard/api/activity?limit=20", headers=headers)
+    assert activity.status_code == 200
+    payload = activity.json()
+    assert payload["source"] == "customer-db-store"
+    assert any(event["action"] == "usage.request" and event["target"] == "/v1/quote/{symbol}" for event in payload["events"])
+    assert any(event["action"] == "key.create" for event in payload["events"])
 
 
 def test_customer_dashboard_accepts_custom_session_header():

@@ -262,11 +262,12 @@ def customer_dashboard_me(session: CustomerSessionContext = Depends(require_cust
 def get_customer_dashboard_overview(
     range: OverviewRange = Query(default="24h"),
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    payload = get_dashboard_overview(range)
+    payload = get_dashboard_overview(db, session.user_id, range)
     return {
         **payload,
-        "source": "customer-placeholder",
+        "source": "customer-db-store",
         "scope": {
             "tenantId": session.tenant_id,
             "email": session.email,
@@ -278,11 +279,12 @@ def get_customer_dashboard_overview(
 def get_customer_dashboard_metrics(
     range: MetricsRange = Query(default="24h"),
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
-    payload = get_dashboard_metrics(range)
+    payload = get_dashboard_metrics(db, session.user_id, range)
     return {
         **payload,
-        "source": "customer-placeholder",
+        "source": "customer-db-store",
         "scope": {
             "tenantId": session.tenant_id,
             "email": session.email,
@@ -296,9 +298,11 @@ def get_customer_dashboard_activity(
     action: str | None = Query(default=None),
     limit: int = Query(default=25, ge=1, le=100),
     session: CustomerSessionContext = Depends(require_customer_session),
+    db: Session = Depends(get_db),
 ):
     payload = get_dashboard_activity(
-        tenant_id=session.tenant_id,
+        db=db,
+        user_id=session.user_id,
         actor_email=session.email,
         status=status,
         action=action,
@@ -306,7 +310,7 @@ def get_customer_dashboard_activity(
     )
     return {
         **payload,
-        "source": "customer-placeholder",
+        "source": "customer-db-store",
         "scope": {
             "tenantId": session.tenant_id,
             "email": session.email,

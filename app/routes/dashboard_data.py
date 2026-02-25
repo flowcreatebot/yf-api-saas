@@ -2,136 +2,25 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import APIKey
+from app.models import APIKey, UsageLog
 from app.security import hash_api_key
 
 OverviewRange = Literal["24h", "7d", "30d"]
 MetricsRange = Literal["24h", "7d", "30d"]
 ActivityStatus = Literal["success", "info", "error"]
 
-_OVERVIEW_BY_RANGE: dict[OverviewRange, dict] = {
-    "24h": {
-        "requests": 12842,
-        "errorRatePct": 0.62,
-        "p95LatencyMs": 184,
-        "fiveXx": 9,
-        "topEndpoints": [
-            {"path": "/v1/quote/{symbol}", "requests": 8120, "errorPct": 0.41, "p95Ms": 142},
-            {"path": "/v1/history/{symbol}", "requests": 2990, "errorPct": 0.95, "p95Ms": 246},
-            {"path": "/v1/quotes", "requests": 1732, "errorPct": 0.78, "p95Ms": 201},
-        ],
-    },
-    "7d": {
-        "requests": 90587,
-        "errorRatePct": 0.58,
-        "p95LatencyMs": 191,
-        "fiveXx": 55,
-        "topEndpoints": [
-            {"path": "/v1/quote/{symbol}", "requests": 58130, "errorPct": 0.39, "p95Ms": 151},
-            {"path": "/v1/history/{symbol}", "requests": 20077, "errorPct": 0.81, "p95Ms": 252},
-            {"path": "/v1/quotes", "requests": 12380, "errorPct": 0.66, "p95Ms": 209},
-        ],
-    },
-    "30d": {
-        "requests": 381204,
-        "errorRatePct": 0.71,
-        "p95LatencyMs": 203,
-        "fiveXx": 320,
-        "topEndpoints": [
-            {"path": "/v1/quote/{symbol}", "requests": 243872, "errorPct": 0.48, "p95Ms": 159},
-            {"path": "/v1/history/{symbol}", "requests": 86241, "errorPct": 1.02, "p95Ms": 266},
-            {"path": "/v1/quotes", "requests": 51091, "errorPct": 0.84, "p95Ms": 216},
-        ],
-    },
-}
-
-_METRICS_BY_RANGE: dict[MetricsRange, dict] = {
-    "24h": {
-        "summary": {"requests": 12842, "errorRatePct": 0.62, "p95LatencyMs": 184, "fiveXx": 9},
-        "requestTrend": [
-            {"bucket": "00:00", "requests": 1804},
-            {"bucket": "04:00", "requests": 1980},
-            {"bucket": "08:00", "requests": 2231},
-            {"bucket": "12:00", "requests": 2410},
-            {"bucket": "16:00", "requests": 2312},
-            {"bucket": "20:00", "requests": 2105},
-        ],
-        "statusBreakdown": [
-            {"status": "2xx", "requests": 12542, "pct": 97.66},
-            {"status": "4xx", "requests": 291, "pct": 2.27},
-            {"status": "5xx", "requests": 9, "pct": 0.07},
-        ],
-        "latencyBuckets": [
-            {"bucket": "0-100ms", "requests": 6010, "pct": 46.80},
-            {"bucket": "101-250ms", "requests": 5010, "pct": 39.01},
-            {"bucket": "251-500ms", "requests": 1512, "pct": 11.77},
-            {"bucket": ">500ms", "requests": 310, "pct": 2.42},
-        ],
-        "topEndpoints": [
-            {"method": "GET", "path": "/v1/quote/{symbol}", "requests": 8120, "errorPct": 0.41, "p95Ms": 142},
-            {"method": "GET", "path": "/v1/history/{symbol}", "requests": 2990, "errorPct": 0.95, "p95Ms": 246},
-            {"method": "GET", "path": "/v1/quotes", "requests": 1732, "errorPct": 0.78, "p95Ms": 201},
-        ],
-    },
-    "7d": {
-        "summary": {"requests": 90587, "errorRatePct": 0.58, "p95LatencyMs": 191, "fiveXx": 55},
-        "requestTrend": [
-            {"bucket": "Mon", "requests": 12441},
-            {"bucket": "Tue", "requests": 12703},
-            {"bucket": "Wed", "requests": 12922},
-            {"bucket": "Thu", "requests": 13110},
-            {"bucket": "Fri", "requests": 13744},
-            {"bucket": "Sat", "requests": 13270},
-            {"bucket": "Sun", "requests": 12397},
-        ],
-        "statusBreakdown": [
-            {"status": "2xx", "requests": 88432, "pct": 97.62},
-            {"status": "4xx", "requests": 2100, "pct": 2.32},
-            {"status": "5xx", "requests": 55, "pct": 0.06},
-        ],
-        "latencyBuckets": [
-            {"bucket": "0-100ms", "requests": 40522, "pct": 44.73},
-            {"bucket": "101-250ms", "requests": 36780, "pct": 40.60},
-            {"bucket": "251-500ms", "requests": 11412, "pct": 12.60},
-            {"bucket": ">500ms", "requests": 1873, "pct": 2.07},
-        ],
-        "topEndpoints": [
-            {"method": "GET", "path": "/v1/quote/{symbol}", "requests": 58130, "errorPct": 0.39, "p95Ms": 151},
-            {"method": "GET", "path": "/v1/history/{symbol}", "requests": 20077, "errorPct": 0.81, "p95Ms": 252},
-            {"method": "GET", "path": "/v1/quotes", "requests": 12380, "errorPct": 0.66, "p95Ms": 209},
-        ],
-    },
-    "30d": {
-        "summary": {"requests": 381204, "errorRatePct": 0.71, "p95LatencyMs": 203, "fiveXx": 320},
-        "requestTrend": [
-            {"bucket": "Week 1", "requests": 90812},
-            {"bucket": "Week 2", "requests": 93442},
-            {"bucket": "Week 3", "requests": 96551},
-            {"bucket": "Week 4", "requests": 100399},
-        ],
-        "statusBreakdown": [
-            {"status": "2xx", "requests": 371420, "pct": 97.43},
-            {"status": "4xx", "requests": 9464, "pct": 2.48},
-            {"status": "5xx", "requests": 320, "pct": 0.09},
-        ],
-        "latencyBuckets": [
-            {"bucket": "0-100ms", "requests": 163903, "pct": 42.99},
-            {"bucket": "101-250ms", "requests": 157004, "pct": 41.18},
-            {"bucket": "251-500ms", "requests": 50781, "pct": 13.32},
-            {"bucket": ">500ms", "requests": 9516, "pct": 2.50},
-        ],
-        "topEndpoints": [
-            {"method": "GET", "path": "/v1/quote/{symbol}", "requests": 243872, "errorPct": 0.48, "p95Ms": 159},
-            {"method": "GET", "path": "/v1/history/{symbol}", "requests": 86241, "errorPct": 1.02, "p95Ms": 266},
-            {"method": "GET", "path": "/v1/quotes", "requests": 51091, "errorPct": 0.84, "p95Ms": 216},
-        ],
-    },
+_RANGE_WINDOWS: dict[OverviewRange, timedelta] = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
 }
 
 
@@ -155,12 +44,22 @@ def _key_env(api_key: APIKey) -> Literal["live", "test"]:
     return "live"
 
 
+def _normalize_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _window_start(range_value: OverviewRange | MetricsRange) -> datetime:
+    return datetime.now(UTC) - _RANGE_WINDOWS[range_value]
+
+
 def _humanize_last_used(value: datetime | None) -> str:
     if value is None:
         return "never"
 
     now = datetime.now(UTC)
-    normalized = value if value.tzinfo else value.replace(tzinfo=UTC)
+    normalized = _normalize_utc(value)
     delta = now - normalized
 
     if delta < timedelta(minutes=1):
@@ -250,68 +149,265 @@ def _find_user_key(db: Session, user_id: int, key_id: str) -> APIKey | None:
     )
 
 
-def get_dashboard_overview(range: OverviewRange):
-    selected = _OVERVIEW_BY_RANGE[range]
+def _usage_rows(db: Session, user_id: int, range_value: OverviewRange | MetricsRange) -> list[UsageLog]:
+    start_at = _window_start(range_value)
+    return (
+        db.query(UsageLog)
+        .join(APIKey, APIKey.id == UsageLog.api_key_id)
+        .filter(APIKey.user_id == user_id, UsageLog.created_at >= start_at)
+        .all()
+    )
+
+
+def _safe_pct(part: int, whole: int) -> float:
+    if whole <= 0:
+        return 0.0
+    return round((part / whole) * 100, 2)
+
+
+def _p95(values: list[int]) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = max(0, ceil(0.95 * len(ordered)) - 1)
+    return int(ordered[index])
+
+
+def _top_endpoints(rows: list[UsageLog], *, include_method: bool) -> list[dict]:
+    grouped: dict[str, dict[str, int | list[int]]] = {}
+
+    for row in rows:
+        entry = grouped.setdefault(
+            row.endpoint,
+            {"requests": 0, "errors": 0, "latencies": []},
+        )
+        entry["requests"] = int(entry["requests"]) + 1
+        if row.status_code >= 400:
+            entry["errors"] = int(entry["errors"]) + 1
+        latencies = entry["latencies"]
+        assert isinstance(latencies, list)
+        latencies.append(int(row.response_ms))
+
+    top = sorted(grouped.items(), key=lambda item: int(item[1]["requests"]), reverse=True)[:5]
+
+    payload: list[dict] = []
+    for endpoint, stats in top:
+        requests = int(stats["requests"])
+        errors = int(stats["errors"])
+        latencies = stats["latencies"]
+        assert isinstance(latencies, list)
+
+        row = {
+            "path": endpoint,
+            "requests": requests,
+            "errorPct": _safe_pct(errors, requests),
+            "p95Ms": _p95(latencies),
+        }
+        if include_method:
+            row = {"method": "GET", **row}
+        payload.append(row)
+
+    return payload
+
+
+def get_dashboard_overview(db: Session, user_id: int, range: OverviewRange):
+    rows = _usage_rows(db, user_id, range)
+    total_requests = len(rows)
+    five_xx = sum(1 for row in rows if 500 <= row.status_code < 600)
+    errors = sum(1 for row in rows if row.status_code >= 400)
+    p95_latency = _p95([int(row.response_ms) for row in rows])
+
+    total_keys = int(
+        db.query(func.count(APIKey.id))
+        .filter(APIKey.user_id == user_id)
+        .scalar()
+        or 0
+    )
+    active_keys = int(
+        db.query(func.count(APIKey.id))
+        .filter(APIKey.user_id == user_id, APIKey.status == "active")
+        .scalar()
+        or 0
+    )
+
     return {
-        "requests24h": selected["requests"],
-        "fiveXx24h": selected["fiveXx"],
+        "requests24h": total_requests,
+        "fiveXx24h": five_xx,
         "range": range,
-        "requests": selected["requests"],
-        "fiveXx": selected["fiveXx"],
-        "errorRatePct": selected["errorRatePct"],
-        "p95LatencyMs": selected["p95LatencyMs"],
-        "topEndpoints": selected["topEndpoints"],
-        "source": "placeholder",
+        "requests": total_requests,
+        "fiveXx": five_xx,
+        "errorRatePct": _safe_pct(errors, total_requests),
+        "p95LatencyMs": p95_latency,
+        "totalKeys": total_keys,
+        "activeKeys": active_keys,
+        "topEndpoints": _top_endpoints(rows, include_method=False),
+        "source": "db-store",
     }
 
 
-def get_dashboard_metrics(range: MetricsRange):
-    selected = _METRICS_BY_RANGE[range]
+def _request_trend(range_value: MetricsRange, rows: list[UsageLog], now: datetime) -> list[dict]:
+    if range_value == "24h":
+        bucket_hours = 4
+        bucket_count = 6
+        start_at = now - timedelta(hours=24)
+        buckets = [start_at + timedelta(hours=bucket_hours * idx) for idx in range(bucket_count)]
+        labels = [bucket.strftime("%H:%M") for bucket in buckets]
+        counts = [0 for _ in labels]
+
+        for row in rows:
+            created_at = _normalize_utc(row.created_at)
+            delta_hours = (created_at - start_at).total_seconds() / 3600
+            index = int(delta_hours // bucket_hours)
+            if 0 <= index < bucket_count:
+                counts[index] += 1
+
+        return [{"bucket": label, "requests": count} for label, count in zip(labels, counts, strict=False)]
+
+    if range_value == "7d":
+        start_day = (now - timedelta(days=6)).date()
+        labels = []
+        counts = []
+        for idx in range(7):
+            day = start_day + timedelta(days=idx)
+            labels.append(day.strftime("%a"))
+            counts.append(0)
+
+        day_to_index = {((start_day + timedelta(days=i)).isoformat()): i for i in range(7)}
+        for row in rows:
+            day_key = _normalize_utc(row.created_at).date().isoformat()
+            if day_key in day_to_index:
+                counts[day_to_index[day_key]] += 1
+
+        return [{"bucket": label, "requests": count} for label, count in zip(labels, counts, strict=False)]
+
+    # 30d -> 4 weekly buckets
+    start_at = now - timedelta(days=30)
+    counts = [0, 0, 0, 0]
+    for row in rows:
+        delta_days = (_normalize_utc(row.created_at) - start_at).total_seconds() / 86400
+        index = int(delta_days // 7)
+        if 0 <= index <= 3:
+            counts[index] += 1
+
+    return [
+        {"bucket": "Week 1", "requests": counts[0]},
+        {"bucket": "Week 2", "requests": counts[1]},
+        {"bucket": "Week 3", "requests": counts[2]},
+        {"bucket": "Week 4", "requests": counts[3]},
+    ]
+
+
+def get_dashboard_metrics(db: Session, user_id: int, range: MetricsRange):
+    rows = _usage_rows(db, user_id, range)
+    total_requests = len(rows)
+    five_xx = sum(1 for row in rows if 500 <= row.status_code < 600)
+    all_errors = sum(1 for row in rows if row.status_code >= 400)
+    p95_latency = _p95([int(row.response_ms) for row in rows])
+
+    two_xx = sum(1 for row in rows if 200 <= row.status_code < 300)
+    four_xx = sum(1 for row in rows if 400 <= row.status_code < 500)
+
+    latency_0_100 = sum(1 for row in rows if row.response_ms <= 100)
+    latency_101_250 = sum(1 for row in rows if 101 <= row.response_ms <= 250)
+    latency_251_500 = sum(1 for row in rows if 251 <= row.response_ms <= 500)
+    latency_500_plus = sum(1 for row in rows if row.response_ms > 500)
+
+    now = datetime.now(UTC)
     return {
         "range": range,
-        "source": "placeholder",
-        **selected,
+        "source": "db-store",
+        "summary": {
+            "requests": total_requests,
+            "errorRatePct": _safe_pct(all_errors, total_requests),
+            "p95LatencyMs": p95_latency,
+            "fiveXx": five_xx,
+        },
+        "requestTrend": _request_trend(range_value=range, rows=rows, now=now),
+        "statusBreakdown": [
+            {"status": "2xx", "requests": two_xx, "pct": _safe_pct(two_xx, total_requests)},
+            {"status": "4xx", "requests": four_xx, "pct": _safe_pct(four_xx, total_requests)},
+            {"status": "5xx", "requests": five_xx, "pct": _safe_pct(five_xx, total_requests)},
+        ],
+        "latencyBuckets": [
+            {"bucket": "0-100ms", "requests": latency_0_100, "pct": _safe_pct(latency_0_100, total_requests)},
+            {"bucket": "101-250ms", "requests": latency_101_250, "pct": _safe_pct(latency_101_250, total_requests)},
+            {"bucket": "251-500ms", "requests": latency_251_500, "pct": _safe_pct(latency_251_500, total_requests)},
+            {"bucket": ">500ms", "requests": latency_500_plus, "pct": _safe_pct(latency_500_plus, total_requests)},
+        ],
+        "topEndpoints": _top_endpoints(rows, include_method=True),
     }
+
+
+def _activity_event_status(status_code: int) -> ActivityStatus:
+    if status_code >= 500:
+        return "error"
+    if status_code >= 400:
+        return "info"
+    return "success"
 
 
 def get_dashboard_activity(
-    tenant_id: str,
+    db: Session,
+    user_id: int,
     actor_email: str,
     status: ActivityStatus | None = None,
     action: str | None = None,
     limit: int = 25,
 ):
-    tenant_fragment = "".join(ch if ch.isalnum() else "-" for ch in tenant_id.lower()).strip("-") or "tenant"
-    events = [
-        {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "actor": "system",
-            "action": "key.rotate",
-            "status": "success",
-            "target": f"key_{tenant_fragment}_live_primary",
-        },
-        {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "actor": actor_email,
-            "action": "key.create",
-            "status": "success",
-            "target": f"{tenant_fragment}-zapier-sandbox",
-        },
-        {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "actor": "system",
-            "action": "usage.alert",
-            "status": "info",
-            "target": f"{tenant_fragment}:p95-latency-spike",
-        },
-        {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "actor": "system",
-            "action": "key.rotate",
-            "status": "error",
-            "target": f"key_{tenant_fragment}_test_zapier",
-        },
-    ]
+    usage_rows = (
+        db.query(UsageLog)
+        .join(APIKey, APIKey.id == UsageLog.api_key_id)
+        .filter(APIKey.user_id == user_id)
+        .order_by(UsageLog.created_at.desc())
+        .limit(max(limit * 4, 50))
+        .all()
+    )
+
+    key_rows = (
+        db.query(APIKey)
+        .filter(APIKey.user_id == user_id)
+        .order_by(APIKey.created_at.desc())
+        .all()
+    )
+
+    events: list[dict] = []
+
+    for row in usage_rows:
+        created_at = _normalize_utc(row.created_at)
+        events.append(
+            {
+                "timestamp": created_at.isoformat(),
+                "actor": f"api-key:{row.api_key_id}",
+                "action": "usage.request",
+                "status": _activity_event_status(row.status_code),
+                "target": row.endpoint,
+            }
+        )
+
+    for key in key_rows:
+        created_at = _normalize_utc(key.created_at)
+        key_target = _masked_prefix(key)
+        events.append(
+            {
+                "timestamp": created_at.isoformat(),
+                "actor": actor_email,
+                "action": "key.create",
+                "status": "success",
+                "target": key_target,
+            }
+        )
+
+        if key.status == "revoked" and key.last_used_at is not None:
+            revoked_at = _normalize_utc(key.last_used_at)
+            events.append(
+                {
+                    "timestamp": revoked_at.isoformat(),
+                    "actor": actor_email,
+                    "action": "key.revoke",
+                    "status": "info",
+                    "target": key_target,
+                }
+            )
 
     if status:
         events = [event for event in events if event["status"] == status]
@@ -320,7 +416,9 @@ def get_dashboard_activity(
         action_query = action.lower()
         events = [event for event in events if action_query in event["action"].lower()]
 
-    return {"source": "placeholder", "events": events[:limit]}
+    events.sort(key=lambda event: event["timestamp"], reverse=True)
+
+    return {"source": "db-store", "events": events[:limit]}
 
 
 def get_dashboard_keys(db: Session, user_id: int):
