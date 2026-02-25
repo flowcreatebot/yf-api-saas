@@ -100,7 +100,7 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ## Phase 5: Sales page + API docs
 
-**Status: IN PROGRESS**
+**Status: COMPLETE**
 
 ### Work
 
@@ -112,15 +112,15 @@ Yahoo Finance API for no-code users (Zapier, Make). Customers pay $4.99/mo, get 
 
 ### Done when
 
-- [ ] Visiting root URL `/` shows a sales page with signup CTA
-- [ ] `/docs` shows interactive API explorer
-- [ ] User can authorize with their API key in the docs UI and make real calls
+- [x] Visiting root URL `/` shows a sales page with signup CTA
+- [x] `/docs` shows interactive API explorer
+- [x] User can authorize with their API key in the docs UI and make real calls
 
 ---
 
 ## Phase 6: Rate limiting + usage tracking
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ### Work
 

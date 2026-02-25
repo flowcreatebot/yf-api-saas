@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -19,6 +19,8 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="Yahoo Finance-compatible API wrapper for no-code tools.",
+    docs_url=None,
+    redoc_url=None,
 )
 
 app.add_middleware(
@@ -67,7 +69,10 @@ app.include_router(market_router)
 app.include_router(billing_router)
 app.include_router(customer_dashboard_router)
 
-CUSTOMER_DASHBOARD_DIR = Path(__file__).resolve().parents[1] / "web" / "customer-dashboard"
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+CUSTOMER_DASHBOARD_DIR = WEB_DIR / "customer-dashboard"
+LANDING_PAGE = WEB_DIR / "landing.html"
+DOCS_PAGE = WEB_DIR / "docs.html"
 
 if CUSTOMER_DASHBOARD_DIR.exists():
     app.mount(
@@ -97,7 +102,16 @@ async def request_validation_exception_handler(_: Request, exc: RequestValidatio
 
 @app.get("/", include_in_schema=False)
 def root():
+    if LANDING_PAGE.exists():
+        return FileResponse(LANDING_PAGE)
     return RedirectResponse(url="/docs")
+
+
+@app.get("/docs", include_in_schema=False)
+def docs():
+    if DOCS_PAGE.exists():
+        return FileResponse(DOCS_PAGE)
+    return RedirectResponse(url="/openapi.json")
 
 
 @app.get("/customer", include_in_schema=False)

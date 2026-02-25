@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import APIKeyHeader
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,7 @@ from .security import hash_api_key
 
 _ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 _BOOTSTRAP_USER_EMAIL = "system@yfapi.local"
+api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
 def _has_active_subscription(db: Session, user_id: int) -> bool:
@@ -26,7 +28,7 @@ def _has_active_subscription(db: Session, user_id: int) -> bool:
 
 def require_api_key(
     request: Request,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Depends(api_key_header),
     db: Session = Depends(get_db),
 ) -> str:
     if not x_api_key:

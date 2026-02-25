@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Y Finance API Docs</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, Arial, sans-serif;
+      background: #0b1020;
+      color: #eaf1ff;
+    }
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+    h1, h2 {
+      margin: 0 0 12px;
+    }
+    p {
+      color: #b4c0e0;
+      line-height: 1.6;
+    }
+    a {
+      color: #9cb0ff;
+    }
+    .quickstart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin: 18px 0 24px;
+    }
+    .card {
+      background: #101733;
+      border: 1px solid #2b3d81;
+      border-radius: 12px;
+      padding: 14px;
+    }
+    pre {
+      background: #0d142f;
+      border: 1px solid #23346e;
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+      font-size: 12px;
+      color: #dbe5ff;
+      margin: 10px 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .meta {
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: #8da0d6;
+    }
+    #api-reference {
+      margin-top: 20px;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Y Finance API docs</h1>
+    <p>
+      Interactive explorer for quotes, history, and fundamentals.
+      Create your account at <a href="/dashboard/#/overview">/dashboard</a>, copy your API key, then authorize below.
+    </p>
+
+    <div class="quickstart-grid">
+      <section class="card">
+        <h2>Zapier quickstart</h2>
+        <p class="meta">Webhooks by Zapier → Custom Request</p>
+        <pre>Method: GET
+URL: https://y-finance-api.onrender.com/v1/quote/AAPL
+Headers:
+  x-api-key: {{your_api_key}}</pre>
+      </section>
+
+      <section class="card">
+        <h2>Make quickstart</h2>
+        <p class="meta">HTTP module → Make a request</p>
+        <pre>URL: https://y-finance-api.onrender.com/v1/history/AAPL?period=1mo&interval=1d
+Method: GET
+Headers:
+  x-api-key: {{your_api_key}}</pre>
+      </section>
+    </div>
+
+  </div>
+
+  <script id="api-reference" data-url="/openapi.json"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>
