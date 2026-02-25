@@ -396,7 +396,7 @@ def test_deployed_customer_session_login_me_logout_flow(
     assert unauth.status_code == 401
     assert unauth.json().get("detail") == "Customer session required"
 
-    email = "deployed-customer@example.com"
+    email = f"deployed-customer-{uuid4().hex[:10]}@example.com"
     password = "SmokePass123!"
 
     register_response = deployed_client.post(
@@ -406,11 +406,7 @@ def test_deployed_customer_session_login_me_logout_flow(
             "password": password,
         },
     )
-
-    if register_response.status_code not in (200, 409):
-        raise AssertionError(
-            f"Unexpected registration status {register_response.status_code}: {register_response.text}"
-        )
+    assert register_response.status_code == 200
 
     login_response = deployed_client.post(
         "/dashboard/api/session/login",
@@ -474,9 +470,11 @@ def test_deployed_customer_created_key_enforces_api_auth(
     token = session.get("token")
     assert token
 
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
     create_key = deployed_client.post(
         "/dashboard/api/keys/create",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=auth_headers,
         json={"label": "Deployed Smoke", "env": "test"},
     )
     assert create_key.status_code == 200
@@ -485,6 +483,13 @@ def test_deployed_customer_created_key_enforces_api_auth(
     raw_key = key_payload.get("rawKey")
     assert raw_key
     assert str(raw_key).startswith("yf_")
+
+    before_overview = deployed_client.get(
+        "/dashboard/api/overview?range=24h",
+        headers=auth_headers,
+    )
+    assert before_overview.status_code == 200
+    before_requests = int(before_overview.json().get("requests") or 0)
 
     quote_response = deployed_client.get(
         "/v1/quote/AAPL",
@@ -500,5 +505,17 @@ def test_deployed_customer_created_key_enforces_api_auth(
         assert quote_payload.get("detail") == "Subscription inactive"
     else:
         assert "Upstream provider error" in quote_payload.get("detail", "")
+
+    after_overview = deployed_client.get(
+        "/dashboard/api/overview?range=24h",
+        headers=auth_headers,
+    )
+    assert after_overview.status_code == 200
+    after_requests = int(after_overview.json().get("requests") or 0)
+
+    if quote_response.status_code in (200, 502):
+        assert after_requests >= before_requests + 1
+    else:
+        assert after_requests == before_requests
 
 
