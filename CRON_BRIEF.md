@@ -3,17 +3,21 @@
 ## Purpose
 Execute concrete shipping work on Y Finance API every run.
 
+## Product target (authoritative)
+This dashboard is for **logged-in paying customers** of the app.
+Not an internal/admin-only dashboard.
+
 ## Execution mode
 - Main acts as coordinator and may use subagents for larger scoped work.
 - First read `PROJECT_YFINANCE_SAAS_PLAN.md` for big-picture direction.
 - Stability limits for cron runs (parallel-safe mode):
   - Spawn **max 2 subagents in parallel** per cycle.
-  - Allowed parallel pair during dashboard push:
+  - Allowed pair:
     - `builder` (implementation)
-    - plus exactly one of `qa` (test hardening) or `docs` (user docs)
+    - plus exactly one of `qa` (test hardening) or `docs` (customer docs)
   - Never spawn more than 2 subagents in the same cycle.
   - If a blocker appears, stop further spawns and report blocker.
-- For immediate focus, every cycle must include one `builder` subagent delivering a user-facing dashboard vertical slice.
+- Every cycle must include one `builder` subagent delivering a customer-facing dashboard vertical slice.
 - Keep scope tight: one concrete milestone per run.
 
 ## Thinking policy (explicit)
@@ -26,17 +30,22 @@ If spawning a subagent, set explicit thinking based on task:
 Prefer execution over long analysis loops.
 
 ## Shipping priority
-1. **Immediate focus: React dashboard migration (v1 UX)**
-   - scaffold React app for dashboard (keep existing static shell working until cutover)
-   - implement modern minimal UI system (layout/nav/cards/tables/forms)
-   - migrate existing pages: overview, API keys, metrics, activity
-   - wire existing internal placeholder APIs (`/internal/api/overview`, `/internal/api/keys`, `/internal/api/activity`)
-   - document local/dev serve + production mount plan
+1. **Immediate focus: customer dashboard v1 (authenticated product UX)**
+   - customer login/session flow (no localStorage-only placeholder auth)
+   - tenant/user-scoped data access for keys/usage/activity
+   - dashboard routes/UX for real customers (`/dashboard` product experience)
+   - migrate placeholder endpoints/contracts to customer-safe equivalents
+   - keep backward compatibility only as temporary migration aid
 2. API correctness + stability
 3. Auth/billing safety
 4. Customer docs quality
 5. Deployment + reliability
 6. Conversion improvements on landing/customer journey
+
+## Guardrails
+- Do not describe the dashboard as “internal” in user updates.
+- Use “customer dashboard” terminology in code comments/docs where applicable.
+- If a task requires product decision (auth provider/session model), surface concise options + recommendation.
 
 ## Operating rules
 - Make real progress each run (code/docs/tests/deploy steps), not just reporting.
