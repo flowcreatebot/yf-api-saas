@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .routes.billing import router as billing_router
 from .routes.customer_dashboard import router as customer_dashboard_router
-from .routes.internal_dashboard import router as internal_dashboard_router
 from .routes.market import router as market_router
 
 app = FastAPI(
@@ -29,29 +28,15 @@ app.add_middleware(
 
 app.include_router(market_router)
 app.include_router(billing_router)
-app.include_router(internal_dashboard_router)
 app.include_router(customer_dashboard_router)
 
-DASHBOARD_DIR = Path(__file__).resolve().parents[1] / "web" / "dashboard"
-DASHBOARD_V2_DIR = Path(__file__).resolve().parents[1] / "web" / "dashboard-react"
+CUSTOMER_DASHBOARD_DIR = Path(__file__).resolve().parents[1] / "web" / "customer-dashboard"
 
-if DASHBOARD_V2_DIR.exists():
-    app.mount(
-        "/internal/dashboard",
-        StaticFiles(directory=str(DASHBOARD_V2_DIR), html=True),
-        name="internal-dashboard",
-    )
+if CUSTOMER_DASHBOARD_DIR.exists():
     app.mount(
         "/dashboard",
-        StaticFiles(directory=str(DASHBOARD_V2_DIR), html=True),
+        StaticFiles(directory=str(CUSTOMER_DASHBOARD_DIR), html=True),
         name="customer-dashboard",
-    )
-
-if DASHBOARD_DIR.exists():
-    app.mount(
-        "/internal/dashboard-legacy",
-        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
-        name="internal-dashboard-legacy",
     )
 
 
@@ -68,15 +53,6 @@ async def request_validation_exception_handler(_: Request, exc: RequestValidatio
 
 @app.get("/", include_in_schema=False)
 def root():
-    return RedirectResponse(url="/docs")
-
-
-@app.get("/internal", include_in_schema=False)
-def internal_root():
-    if DASHBOARD_V2_DIR.exists():
-        return RedirectResponse(url="/internal/dashboard/")
-    if DASHBOARD_DIR.exists():
-        return RedirectResponse(url="/internal/dashboard-legacy/")
     return RedirectResponse(url="/docs")
 
 

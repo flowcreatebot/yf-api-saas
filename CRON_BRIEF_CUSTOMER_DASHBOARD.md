@@ -46,4 +46,4 @@ Report only:
 
 ## Output style
 - Say "customer dashboard" in updates.
-- Do not call this lane "internal dashboard".
+- Keep updates focused on customer dashboard delivery.

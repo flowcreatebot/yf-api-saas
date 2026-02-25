@@ -11,8 +11,7 @@ Ship a customer-facing dashboard for paying users, with secure auth and tenant-s
 
 ## Architecture decisions (v1)
 1. Route model
-   - Customer app route: `/dashboard` (target)
-   - Existing `/internal/*` remains legacy/separate until cutover.
+   - Customer app route: `/dashboard`.
 2. Auth/session
    - Use server-validated sessions/tokens (not local-only browser flags).
 3. Tenant scoping

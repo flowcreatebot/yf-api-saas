@@ -5,10 +5,8 @@ from threading import Lock
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
-
-router = APIRouter(prefix="/internal/api", tags=["internal-dashboard"])
 
 OverviewRange = Literal["24h", "7d", "30d"]
 MetricsRange = Literal["24h", "7d", "30d"]
@@ -52,12 +50,7 @@ _OVERVIEW_BY_RANGE: dict[OverviewRange, dict] = {
 
 _METRICS_BY_RANGE: dict[MetricsRange, dict] = {
     "24h": {
-        "summary": {
-            "requests": 12842,
-            "errorRatePct": 0.62,
-            "p95LatencyMs": 184,
-            "fiveXx": 9,
-        },
+        "summary": {"requests": 12842, "errorRatePct": 0.62, "p95LatencyMs": 184, "fiveXx": 9},
         "requestTrend": [
             {"bucket": "00:00", "requests": 1804},
             {"bucket": "04:00", "requests": 1980},
@@ -84,12 +77,7 @@ _METRICS_BY_RANGE: dict[MetricsRange, dict] = {
         ],
     },
     "7d": {
-        "summary": {
-            "requests": 90587,
-            "errorRatePct": 0.58,
-            "p95LatencyMs": 191,
-            "fiveXx": 55,
-        },
+        "summary": {"requests": 90587, "errorRatePct": 0.58, "p95LatencyMs": 191, "fiveXx": 55},
         "requestTrend": [
             {"bucket": "Mon", "requests": 12441},
             {"bucket": "Tue", "requests": 12703},
@@ -117,12 +105,7 @@ _METRICS_BY_RANGE: dict[MetricsRange, dict] = {
         ],
     },
     "30d": {
-        "summary": {
-            "requests": 381204,
-            "errorRatePct": 0.71,
-            "p95LatencyMs": 203,
-            "fiveXx": 320,
-        },
+        "summary": {"requests": 381204, "errorRatePct": 0.71, "p95LatencyMs": 203, "fiveXx": 320},
         "requestTrend": [
             {"bucket": "Week 1", "requests": 90812},
             {"bucket": "Week 2", "requests": 93442},
@@ -186,7 +169,6 @@ _key_store: dict[str, DashboardKey] = {
 
 def _masked_prefix(env: Literal["live", "test"]) -> str:
     tag = "live" if env == "live" else "test"
-    # Placeholder-safe mask only; no secret tokens are ever generated or exposed.
     return f"yf_{tag}_••{uuid4().hex[:4]}"
 
 
@@ -195,7 +177,7 @@ def _key_list() -> list[dict]:
 
 
 def _success(action: str, key: DashboardKey | None = None) -> dict:
-    payload = {
+    return {
         "ok": True,
         "source": "mock-store",
         "action": action,
@@ -206,7 +188,6 @@ def _success(action: str, key: DashboardKey | None = None) -> dict:
         "error": None,
         "timestamp": datetime.now(UTC).isoformat(),
     }
-    return payload
 
 
 def _missing_key_error(action: str, key_id: str) -> HTTPException:
@@ -226,12 +207,9 @@ def _missing_key_error(action: str, key_id: str) -> HTTPException:
     )
 
 
-@router.get("/overview")
-def get_dashboard_overview(range: OverviewRange = Query(default="24h")):
-    """Placeholder dashboard payload until real analytics pipeline is wired."""
+def get_dashboard_overview(range: OverviewRange):
     selected = _OVERVIEW_BY_RANGE[range]
     return {
-        # Keep legacy keys for default shell compatibility.
         "requests24h": selected["requests"],
         "fiveXx24h": selected["fiveXx"],
         "range": range,
@@ -244,9 +222,7 @@ def get_dashboard_overview(range: OverviewRange = Query(default="24h")):
     }
 
 
-@router.get("/metrics")
-def get_dashboard_metrics(range: MetricsRange = Query(default="24h")):
-    """Placeholder structured metrics payload for React dashboard migration."""
+def get_dashboard_metrics(range: MetricsRange):
     selected = _METRICS_BY_RANGE[range]
     return {
         "range": range,
@@ -255,13 +231,7 @@ def get_dashboard_metrics(range: MetricsRange = Query(default="24h")):
     }
 
 
-@router.get("/activity")
-def get_dashboard_activity(
-    status: ActivityStatus | None = Query(default=None),
-    action: str | None = Query(default=None),
-    limit: int = Query(default=25, ge=1, le=100),
-):
-    """Placeholder activity stream payload for dashboard timeline shell."""
+def get_dashboard_activity(status: ActivityStatus | None = None, action: str | None = None, limit: int = 25):
     events = [
         {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -300,69 +270,57 @@ def get_dashboard_activity(
         action_query = action.lower()
         events = [event for event in events if action_query in event["action"].lower()]
 
-    return {
-        "source": "placeholder",
-        "events": events[:limit],
-    }
+    return {"source": "placeholder", "events": events[:limit]}
 
 
-@router.get("/keys")
 def get_dashboard_keys():
-    """Mock key inventory payload for dashboard API key management."""
     with _store_lock:
-        return {
-            "keys": _key_list(),
-            "source": "mock-store",
-        }
+        return {"keys": _key_list(), "source": "mock-store"}
 
 
-@router.post("/keys/create")
 def create_dashboard_key(payload: CreateKeyRequest):
     with _store_lock:
         key_id = f"key_{uuid4().hex[:10]}"
         key = DashboardKey(
             id=key_id,
             label=payload.label.strip(),
-            env=payload.env,
             prefix=_masked_prefix(payload.env),
+            env=payload.env,
             active=True,
-            lastUsed="just now",
+            lastUsed="never",
         )
         _key_store[key_id] = key
-        return _success(action="create", key=key)
+        return _success("create", key)
 
 
-@router.post("/keys/{key_id}/rotate")
 def rotate_dashboard_key(key_id: str):
     with _store_lock:
         key = _key_store.get(key_id)
         if not key:
             raise _missing_key_error("rotate", key_id)
 
-        updated = key.model_copy(update={"prefix": _masked_prefix(key.env), "lastUsed": "rotated now"})
-        _key_store[key_id] = updated
-        return _success(action="rotate", key=updated)
+        key = key.model_copy(update={"prefix": _masked_prefix(key.env), "lastUsed": "just now"})
+        _key_store[key_id] = key
+        return _success("rotate", key)
 
 
-@router.post("/keys/{key_id}/revoke")
 def revoke_dashboard_key(key_id: str):
     with _store_lock:
         key = _key_store.get(key_id)
         if not key:
             raise _missing_key_error("revoke", key_id)
 
-        updated = key.model_copy(update={"active": False, "lastUsed": "revoked now"})
-        _key_store[key_id] = updated
-        return _success(action="revoke", key=updated)
+        key = key.model_copy(update={"active": False, "lastUsed": "just now"})
+        _key_store[key_id] = key
+        return _success("revoke", key)
 
 
-@router.post("/keys/{key_id}/activate")
 def activate_dashboard_key(key_id: str):
     with _store_lock:
         key = _key_store.get(key_id)
         if not key:
             raise _missing_key_error("activate", key_id)
 
-        updated = key.model_copy(update={"active": True, "lastUsed": "activated now"})
-        _key_store[key_id] = updated
-        return _success(action="activate", key=updated)
+        key = key.model_copy(update={"active": True, "lastUsed": "just now"})
+        _key_store[key_id] = key
+        return _success("activate", key)

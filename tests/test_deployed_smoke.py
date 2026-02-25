@@ -14,16 +14,16 @@ def _api_key() -> str:
     return os.getenv("DEPLOYED_API_KEY", "").strip()
 
 
-def _expect_dashboard_checks() -> bool:
-    return os.getenv("DEPLOYED_EXPECT_DASHBOARD", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _expect_webhook_secret_checks() -> bool:
     return os.getenv("DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _expect_stripe_checkout_checks() -> bool:
     return os.getenv("DEPLOYED_EXPECT_STRIPE_CHECKOUT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _expect_customer_dashboard_checks() -> bool:
+    return os.getenv("DEPLOYED_EXPECT_CUSTOMER_DASHBOARD", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @pytest.fixture(scope="module")
@@ -41,9 +41,11 @@ def deployed_client(deployed_base_url: str):
 
 
 @pytest.fixture(scope="module")
-def dashboard_checks_enabled() -> bool:
-    if not _expect_dashboard_checks():
-        pytest.skip("DEPLOYED_EXPECT_DASHBOARD is not enabled; skipping deployed dashboard canaries")
+def customer_dashboard_checks_enabled() -> bool:
+    if not _expect_customer_dashboard_checks():
+        pytest.skip(
+            "DEPLOYED_EXPECT_CUSTOMER_DASHBOARD is not enabled; skipping deployed customer dashboard session canaries"
+        )
     return True
 
 
@@ -238,6 +240,7 @@ def test_deployed_fundamentals_with_real_key_if_provided(deployed_client: httpx.
 @pytest.mark.deployed
 @pytest.mark.billing
 @pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_checkout_rejects_insecure_redirect_url(deployed_client: httpx.Client):
     response = deployed_client.post(
         "/v1/billing/checkout/session",
@@ -258,6 +261,7 @@ def test_deployed_checkout_rejects_insecure_redirect_url(deployed_client: httpx.
 @pytest.mark.deployed
 @pytest.mark.billing
 @pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_checkout_session_happy_path_or_expected_config_guard(
     deployed_client: httpx.Client,
 ):
@@ -290,6 +294,7 @@ def test_deployed_checkout_session_happy_path_or_expected_config_guard(
 @pytest.mark.deployed
 @pytest.mark.billing
 @pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_webhook_requires_signature_header_or_secret_not_configured(
     deployed_client: httpx.Client,
 ):
@@ -306,6 +311,7 @@ def test_deployed_webhook_requires_signature_header_or_secret_not_configured(
 @pytest.mark.deployed
 @pytest.mark.billing
 @pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_webhook_rejects_invalid_signature_when_secret_enabled(
     deployed_client: httpx.Client,
 ):
@@ -329,37 +335,54 @@ def test_deployed_webhook_rejects_invalid_signature_when_secret_enabled(
 
 @pytest.mark.deployed
 @pytest.mark.critical
-def test_deployed_internal_root_redirects_to_dashboard(
+@pytest.mark.mutation
+def test_deployed_customer_session_login_me_logout_flow(
     deployed_client: httpx.Client,
-    dashboard_checks_enabled: bool,
+    customer_dashboard_checks_enabled: bool,
 ):
-    response = deployed_client.get("/internal", follow_redirects=False)
-    assert response.status_code in (302, 307)
-    assert response.headers.get("location") == "/internal/dashboard/"
+    unauth = deployed_client.get("/dashboard/api/session/me")
+    assert unauth.status_code == 401
+    assert unauth.json().get("detail") == "Customer session required"
+
+    login_response = deployed_client.post(
+        "/dashboard/api/session/login",
+        json={
+            "email": "deployed-customer@example.com",
+            "tenantId": "smoke-tenant",
+        },
+    )
+    assert login_response.status_code == 200
+
+    login_payload = login_response.json()
+    assert login_payload.get("ok") is True
+    assert login_payload.get("source") == "customer-session-store"
+    session = login_payload.get("session") or {}
+    token = session.get("token")
+    assert token
+
+    me_response = deployed_client.get(
+        "/dashboard/api/session/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert me_response.status_code == 200
+
+    me_payload = me_response.json()
+    assert me_payload.get("ok") is True
+    assert me_payload.get("source") == "customer-session-store"
+    assert (me_payload.get("session") or {}).get("email") == "deployed-customer@example.com"
+
+    logout_response = deployed_client.post(
+        "/dashboard/api/session/logout",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert logout_response.status_code == 200
+    assert logout_response.json().get("ok") is True
+
+    post_logout = deployed_client.get(
+        "/dashboard/api/session/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert post_logout.status_code == 401
+    assert post_logout.json().get("detail") == "Invalid customer session"
 
 
-@pytest.mark.deployed
-@pytest.mark.critical
-def test_deployed_dashboard_shell_available(
-    deployed_client: httpx.Client,
-    dashboard_checks_enabled: bool,
-):
-    response = deployed_client.get("/internal/dashboard/")
-    assert response.status_code == 200
-    assert "Y Finance Dashboard" in response.text
-
-
-@pytest.mark.deployed
-@pytest.mark.critical
-def test_deployed_dashboard_overview_api_contract(
-    deployed_client: httpx.Client,
-    dashboard_checks_enabled: bool,
-):
-    response = deployed_client.get("/internal/api/overview?range=24h")
-    assert response.status_code == 200
-
-    payload = response.json()
-    assert payload.get("source") == "placeholder"
-    assert payload.get("range") == "24h"
-    assert isinstance(payload.get("topEndpoints"), list)
-    assert payload.get("topEndpoints"), "Expected at least one endpoint in dashboard overview"

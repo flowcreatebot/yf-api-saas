@@ -81,20 +81,22 @@ cp .env.example .env
 docker compose up --build
 ```
 
-## Internal dashboard
+## Customer dashboard
 
-Dashboard routes during migration:
+Customer dashboard route:
 
-- Primary dashboard: `/internal/dashboard/`
-- Legacy compatibility shell: `/internal/dashboard-legacy/`
+- `/dashboard/`
 
-Current dashboard includes:
-- Overview wired to `/internal/api/overview?range=24h|7d|30d`
-- Metrics wired to `/internal/api/metrics?range=24h|7d|30d` (structured payload: summary, trend, status breakdown, latency buckets, top endpoints)
-- API Keys wired to `/internal/api/keys` + create/rotate/revoke/activate
-- Activity wired to `/internal/api/activity`
+Customer dashboard APIs:
+- `/dashboard/api/session/login`
+- `/dashboard/api/session/me`
+- `/dashboard/api/session/logout`
+- `/dashboard/api/overview?range=24h|7d|30d`
+- `/dashboard/api/metrics?range=24h|7d|30d`
+- `/dashboard/api/keys` + create/rotate/revoke/activate
+- `/dashboard/api/activity`
 
-See `docs/DASHBOARD_REACT.md` for local/dev + migration mount plan.
+See `docs/CUSTOMER_DASHBOARD.md` for current behavior and local/dev notes.
 
 ## Legal note
 

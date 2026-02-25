@@ -1,7 +1,5 @@
 function dashboardApiBase() {
-  const path = window.location.pathname || "";
-  if (path.startsWith("/dashboard")) return "/dashboard/api";
-  return "/internal/api";
+  return "/dashboard/api";
 }
 
 export async function getOverview(range) {

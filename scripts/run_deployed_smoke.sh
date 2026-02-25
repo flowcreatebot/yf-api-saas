@@ -3,16 +3,31 @@ set -euo pipefail
 
 DEPLOYED_BASE_URL="${DEPLOYED_BASE_URL:-https://y-finance-api.onrender.com}"
 DEPLOYED_API_KEY="${DEPLOYED_API_KEY:-}"
-DEPLOYED_EXPECT_DASHBOARD="${DEPLOYED_EXPECT_DASHBOARD:-0}"
 DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET="${DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET:-0}"
 DEPLOYED_EXPECT_STRIPE_CHECKOUT="${DEPLOYED_EXPECT_STRIPE_CHECKOUT:-0}"
+DEPLOYED_EXPECT_CUSTOMER_DASHBOARD="${DEPLOYED_EXPECT_CUSTOMER_DASHBOARD:-0}"
+DEPLOYED_SMOKE_PROFILE="${DEPLOYED_SMOKE_PROFILE:-staging}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 export DEPLOYED_BASE_URL
 export DEPLOYED_API_KEY
-export DEPLOYED_EXPECT_DASHBOARD
 export DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET
 export DEPLOYED_EXPECT_STRIPE_CHECKOUT
+export DEPLOYED_EXPECT_CUSTOMER_DASHBOARD
+export DEPLOYED_SMOKE_PROFILE
+
+case "$DEPLOYED_SMOKE_PROFILE" in
+  staging)
+    PYTEST_MARK_EXPR="deployed"
+    ;;
+  production-readonly)
+    PYTEST_MARK_EXPR="deployed and not mutation"
+    ;;
+  *)
+    echo "[deployed-smoke] invalid DEPLOYED_SMOKE_PROFILE=${DEPLOYED_SMOKE_PROFILE} (expected: staging|production-readonly)" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p reports
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
@@ -26,11 +41,14 @@ REPORT_PATH="reports/deployed_smoke_${STAMP}.txt"
   else
     echo "[deployed-smoke] api_key=not_provided (authenticated quote check will be skipped)"
   fi
-  echo "[deployed-smoke] expect_dashboard=${DEPLOYED_EXPECT_DASHBOARD}"
+  # dashboard internal canary removed
   echo "[deployed-smoke] expect_webhook_secret=${DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET}"
   echo "[deployed-smoke] expect_stripe_checkout=${DEPLOYED_EXPECT_STRIPE_CHECKOUT}"
+  echo "[deployed-smoke] expect_customer_dashboard=${DEPLOYED_EXPECT_CUSTOMER_DASHBOARD}"
+  echo "[deployed-smoke] profile=${DEPLOYED_SMOKE_PROFILE}"
+  echo "[deployed-smoke] marker_expr=${PYTEST_MARK_EXPR}"
 
-  "$PYTHON_BIN" -m pytest -q -m deployed tests/test_deployed_smoke.py
+  "$PYTHON_BIN" -m pytest -q -m "$PYTEST_MARK_EXPR" tests/test_deployed_smoke.py
 } | tee "$REPORT_PATH"
 
 cp "$REPORT_PATH" reports/latest_deployed_smoke.txt
