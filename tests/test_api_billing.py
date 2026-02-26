@@ -1044,6 +1044,156 @@ def test_subscription_updated_trialing_provisions_key_and_enables_market_access(
 
 
 @pytest.mark.e2e
+@pytest.mark.parametrize("created_status", ["active", "trialing"])
+def test_unpaid_checkout_then_subscription_created_provisions_key_and_enables_market_access(
+    monkeypatch,
+    created_status: str,
+):
+    import app.routes.billing as billing
+    import app.routes.market as market
+
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, session_token = _register_customer()
+    customer_id = f"cus_created_flow_{uuid4().hex[:10]}"
+    subscription_id = f"sub_created_flow_{uuid4().hex[:10]}"
+    key_suffix = f"created_{uuid4().hex}"
+
+    class DummyCustomer:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': customer_id}
+
+    class DummyCheckoutSession:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': 'cs_created_123', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {'lastPrice': 789.01}
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    monkeypatch.setattr(billing.stripe, 'Customer', DummyCustomer)
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummyCheckoutSession)
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    checkout_response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {session_token}'},
+        json={
+            'email': email,
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+        assert user.stripe_customer_id == customer_id
+
+    class CheckoutCompletedUnpaidWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'customer': customer_id,
+                        'subscription': subscription_id,
+                        'customer_email': email,
+                        'payment_status': 'unpaid',
+                        'metadata': {'user_id': str(user_id)},
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', CheckoutCompletedUnpaidWebhook)
+
+    unpaid_webhook = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert unpaid_webhook.status_code == 200
+    assert unpaid_webhook.json()['handled'] is True
+    assert unpaid_webhook.json()['provisioned_key'] is False
+
+    with SessionLocal() as db:
+        pre_activation_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert pre_activation_key_count == 0
+
+    monkeypatch.setattr(billing.secrets, 'token_urlsafe', lambda size: key_suffix)
+
+    class SubscriptionCreatedWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.created',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': created_status,
+                        'current_period_end': 1770000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', SubscriptionCreatedWebhook)
+
+    first_webhook = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert first_webhook.status_code == 200
+    assert first_webhook.json()['handled'] is True
+    assert first_webhook.json()['provisioned_key'] is True
+
+    second_webhook = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert second_webhook.status_code == 200
+    assert second_webhook.json()['handled'] is True
+    assert second_webhook.json()['provisioned_key'] is False
+
+    raw_key = f"yf_live_{key_suffix}"
+    market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert market_response.status_code == 200
+    assert market_response.json()['symbol'] == 'AAPL'
+
+    with SessionLocal() as db:
+        subscription_count = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .count()
+        )
+        assert subscription_count == 1
+
+        subscription = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        assert subscription is not None
+        assert subscription.status == created_status
+
+        active_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert active_key_count == 1
+
+
+@pytest.mark.e2e
 def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_access(monkeypatch):
     import app.routes.billing as billing
     import app.routes.market as market
