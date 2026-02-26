@@ -878,6 +878,85 @@ def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioni
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+def test_deployed_checkout_completed_client_reference_id_fallback_provisions_first_key_idempotently(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-client-ref-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    session_payload = (register_response.json().get("session") or {})
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    pre_keys_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert pre_keys_response.status_code == 200
+    pre_keys_payload = pre_keys_response.json()
+    assert pre_keys_payload.get("source") == "customer-db-store"
+    pre_keys = ((pre_keys_payload.get("data") or {}).get("keys") or [])
+    assert pre_keys == []
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    webhook_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "subscription": f"sub_client_ref_{uuid4().hex[:10]}",
+                "payment_status": "paid",
+                "client_reference_id": str(user_id),
+            }
+        },
+    }
+
+    first_webhook = _post_signed_webhook(deployed_client, webhook_event)
+    assert first_webhook.status_code == 200
+    first_payload = first_webhook.json()
+    assert first_payload.get("received") is True
+    assert first_payload.get("type") == "checkout.session.completed"
+    assert first_payload.get("handled") is True
+    assert first_payload.get("provisioned_key") is True
+
+    keys_after_first_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert keys_after_first_response.status_code == 200
+    keys_after_first_payload = keys_after_first_response.json()
+    assert keys_after_first_payload.get("source") == "customer-db-store"
+    keys_after_first = ((keys_after_first_payload.get("data") or {}).get("keys") or [])
+    assert len(keys_after_first) == 1
+    assert keys_after_first[0].get("active") is True
+
+    duplicate_webhook = _post_signed_webhook(deployed_client, webhook_event)
+    assert duplicate_webhook.status_code == 200
+    duplicate_payload = duplicate_webhook.json()
+    assert duplicate_payload.get("received") is True
+    assert duplicate_payload.get("type") == "checkout.session.completed"
+    assert duplicate_payload.get("handled") is True
+    assert duplicate_payload.get("provisioned_key") is False
+
+    keys_after_duplicate_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert keys_after_duplicate_response.status_code == 200
+    keys_after_duplicate_payload = keys_after_duplicate_response.json()
+    assert keys_after_duplicate_payload.get("source") == "customer-db-store"
+    keys_after_duplicate = ((keys_after_duplicate_payload.get("data") or {}).get("keys") or [])
+    assert len(keys_after_duplicate) == 1
+    assert keys_after_duplicate[0].get("id") == keys_after_first[0].get("id")
+    assert keys_after_duplicate[0].get("active") is True
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_checkout_no_payment_required_provisions_trialing_first_key_idempotently(
     deployed_client: httpx.Client,
     stripe_mutation_e2e_checks_enabled: bool,

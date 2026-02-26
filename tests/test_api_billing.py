@@ -456,6 +456,72 @@ def test_webhook_checkout_completed_falls_back_to_client_reference_id_without_me
         assert key is not None
 
 
+def test_webhook_checkout_completed_no_payment_required_with_client_reference_id_provisions_trialing_key_idempotently(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    subscription_id = f"sub_client_ref_trial_{uuid4().hex[:8]}"
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'subscription': subscription_id,
+                        'payment_status': 'no_payment_required',
+                        'client_reference_id': str(user_id),
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    first = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert first.status_code == 200
+    assert first.json()['handled'] is True
+    assert first.json()['provisioned_key'] is True
+
+    second = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert second.status_code == 200
+    assert second.json()['handled'] is True
+    assert second.json()['provisioned_key'] is False
+
+    with SessionLocal() as db:
+        subscription_count = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .count()
+        )
+        assert subscription_count == 1
+
+        subscription = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        assert subscription is not None
+        assert subscription.status == 'trialing'
+
+        active_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert active_key_count == 1
+
+
 def test_webhook_checkout_completed_is_idempotent_for_subscription_and_key(monkeypatch):
     import app.routes.billing as billing
     from app.db import SessionLocal
