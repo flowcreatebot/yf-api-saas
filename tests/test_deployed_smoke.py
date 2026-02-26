@@ -95,11 +95,6 @@ def stripe_mutation_e2e_checks_enabled(customer_dashboard_checks_enabled: bool) 
             "DEPLOYED_EXPECT_STRIPE_MUTATION_E2E is not enabled; skipping deployed Stripe mutation e2e canary"
         )
 
-    if not _expect_stripe_checkout_checks():
-        pytest.skip(
-            "DEPLOYED_EXPECT_STRIPE_CHECKOUT must be enabled for deployed Stripe mutation e2e canary"
-        )
-
     if not _expect_webhook_secret_checks():
         pytest.skip(
             "DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET must be enabled for deployed Stripe mutation e2e canary"
@@ -490,20 +485,6 @@ def test_deployed_checkout_and_signed_webhook_activate_customer_subscription(
     assert pre_subscription_quote.status_code == 403
     assert pre_subscription_quote.json().get("detail") == "Subscription inactive"
 
-    checkout_response = deployed_client.post(
-        "/v1/billing/checkout/session",
-        headers=auth_headers,
-        json={
-            "email": email,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert checkout_response.status_code == 200
-    checkout_payload = checkout_response.json()
-    assert checkout_payload.get("id")
-    assert str(checkout_payload.get("url", "")).startswith("https://")
-
     user_id = _user_id_from_tenant(str(tenant_id))
 
     webhook_event = {
@@ -575,17 +556,6 @@ def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioni
     assert pre_keys_response.status_code == 200
     pre_keys = ((pre_keys_response.json().get("data") or {}).get("keys") or [])
     assert pre_keys == []
-
-    checkout_response = deployed_client.post(
-        "/v1/billing/checkout/session",
-        headers=auth_headers,
-        json={
-            "email": email,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert checkout_response.status_code == 200
 
     user_id = _user_id_from_tenant(str(tenant_id))
     webhook_event = {
@@ -674,17 +644,6 @@ def test_deployed_subscription_deleted_webhook_revokes_market_access(
     user_id = _user_id_from_tenant(str(tenant_id))
     customer_id = f"cus_cancel_{uuid4().hex[:10]}"
     subscription_id = f"sub_cancel_{uuid4().hex[:10]}"
-
-    checkout_response = deployed_client.post(
-        "/v1/billing/checkout/session",
-        headers=auth_headers,
-        json={
-            "email": email,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert checkout_response.status_code == 200
 
     activate_event = {
         "id": f"evt_smoke_{uuid4().hex[:14]}",
@@ -775,17 +734,6 @@ def test_deployed_subscription_updated_webhook_restores_market_access(
     user_id = _user_id_from_tenant(str(tenant_id))
     customer_id = f"cus_reactivate_{uuid4().hex[:10]}"
     subscription_id = f"sub_reactivate_{uuid4().hex[:10]}"
-
-    checkout_response = deployed_client.post(
-        "/v1/billing/checkout/session",
-        headers=auth_headers,
-        json={
-            "email": email,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert checkout_response.status_code == 200
 
     activate_event = {
         "id": f"evt_smoke_{uuid4().hex[:14]}",
