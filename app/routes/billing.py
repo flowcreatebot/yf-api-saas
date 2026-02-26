@@ -152,10 +152,15 @@ def _upsert_subscription_for_user(
     return subscription
 
 
-def _mark_customer_subscription_event(subscription_payload: dict, db: Session) -> bool:
+def _mark_customer_subscription_event(
+    subscription_payload: dict,
+    db: Session,
+    *,
+    provision_key_on_active_status: bool = False,
+) -> tuple[bool, bool]:
     stripe_subscription_id = subscription_payload.get("id")
     if not stripe_subscription_id:
-        return False
+        return False, False
 
     subscription = (
         db.query(Subscription)
@@ -163,30 +168,38 @@ def _mark_customer_subscription_event(subscription_payload: dict, db: Session) -
         .first()
     )
 
+    status = str(subscription_payload.get("status") or "incomplete")
+
     if subscription is None:
         customer_id = subscription_payload.get("customer")
         if not customer_id:
-            return False
+            return False, False
 
         user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
         if user is None:
-            return False
+            return False, False
 
         subscription = Subscription(
             user_id=user.id,
             stripe_subscription_id=stripe_subscription_id,
-            status=str(subscription_payload.get("status") or "incomplete"),
+            status=status,
             plan=settings.billing_starter_plan_id,
             current_period_end=_utc_from_epoch(subscription_payload.get("current_period_end")),
         )
         db.add(subscription)
     else:
-        subscription.status = str(subscription_payload.get("status") or subscription.status)
+        subscription.status = status
         subscription.current_period_end = _utc_from_epoch(subscription_payload.get("current_period_end"))
         if not subscription.plan:
             subscription.plan = settings.billing_starter_plan_id
 
-    return True
+    provisioned_key = False
+    if provision_key_on_active_status and status in _ACTIVE_SUBSCRIPTION_STATUSES:
+        user = db.query(User).filter(User.id == subscription.user_id).first()
+        if user is not None:
+            provisioned_key = _provision_first_api_key(user, db)
+
+    return True, provisioned_key
 
 
 @router.get("/plans")
@@ -303,7 +316,11 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
             handled = True
 
     elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
-        handled = _mark_customer_subscription_event(event_object, db)
+        handled, provisioned_key = _mark_customer_subscription_event(
+            event_object,
+            db,
+            provision_key_on_active_status=event_type == "customer.subscription.updated",
+        )
 
     db.commit()
 
