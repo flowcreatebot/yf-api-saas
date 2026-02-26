@@ -49,20 +49,32 @@ def _deployed_health_retry_delay_seconds() -> float:
         return 2.0
 
 
+def _deployed_smoke_profile() -> str:
+    return os.getenv("DEPLOYED_SMOKE_PROFILE", "").strip().lower()
+
+
+def _env_truthy(key: str) -> bool:
+    return os.getenv(key, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _expect_webhook_secret_checks() -> bool:
-    return os.getenv("DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET", "").strip().lower() in {"1", "true", "yes", "on"}
+    profile = _deployed_smoke_profile()
+    return _env_truthy("DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET") or profile in {"stripe-mutation", "stripe-checkout"}
 
 
 def _expect_stripe_checkout_checks() -> bool:
-    return os.getenv("DEPLOYED_EXPECT_STRIPE_CHECKOUT", "").strip().lower() in {"1", "true", "yes", "on"}
+    profile = _deployed_smoke_profile()
+    return _env_truthy("DEPLOYED_EXPECT_STRIPE_CHECKOUT") or profile == "stripe-checkout"
 
 
 def _expect_customer_dashboard_checks() -> bool:
-    return os.getenv("DEPLOYED_EXPECT_CUSTOMER_DASHBOARD", "").strip().lower() in {"1", "true", "yes", "on"}
+    profile = _deployed_smoke_profile()
+    return _env_truthy("DEPLOYED_EXPECT_CUSTOMER_DASHBOARD") or profile in {"stripe-mutation", "stripe-checkout"}
 
 
 def _expect_stripe_mutation_e2e_checks() -> bool:
-    return os.getenv("DEPLOYED_EXPECT_STRIPE_MUTATION_E2E", "").strip().lower() in {"1", "true", "yes", "on"}
+    profile = _deployed_smoke_profile()
+    return _env_truthy("DEPLOYED_EXPECT_STRIPE_MUTATION_E2E") or profile in {"stripe-mutation", "stripe-checkout"}
 
 
 def _stripe_webhook_secret() -> str:
