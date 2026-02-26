@@ -739,6 +739,132 @@ def test_deployed_subscription_deleted_webhook_revokes_market_access(
 
 
 @pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_subscription_updated_webhook_restores_market_access(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-reactivate-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    session_payload = (register_response.json().get("session") or {})
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    create_key_response = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Reactivation E2E", "env": "test"},
+    )
+    assert create_key_response.status_code == 200
+    raw_key = ((create_key_response.json().get("data") or {}).get("rawKey"))
+    assert raw_key
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    customer_id = f"cus_reactivate_{uuid4().hex[:10]}"
+    subscription_id = f"sub_reactivate_{uuid4().hex[:10]}"
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    activate_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": customer_id,
+                "subscription": subscription_id,
+                "customer_email": email,
+                "payment_status": "paid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    activate_webhook = _post_signed_webhook(deployed_client, activate_event)
+    assert activate_webhook.status_code == 200
+    assert activate_webhook.json().get("handled") is True
+
+    active_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert active_quote.status_code in (200, 502)
+
+    cancel_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "customer.subscription.deleted",
+        "data": {
+            "object": {
+                "id": subscription_id,
+                "customer": customer_id,
+                "status": "canceled",
+                "current_period_end": int(time.time()),
+            }
+        },
+    }
+
+    cancel_webhook = _post_signed_webhook(deployed_client, cancel_event)
+    assert cancel_webhook.status_code == 200
+    assert cancel_webhook.json().get("handled") is True
+
+    blocked_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert blocked_quote.status_code == 403
+    assert blocked_quote.json().get("detail") == "Subscription inactive"
+
+    reactivate_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": {
+                "id": subscription_id,
+                "customer": customer_id,
+                "status": "active",
+                "current_period_end": int(time.time()) + 3600,
+            }
+        },
+    }
+
+    reactivate_webhook = _post_signed_webhook(deployed_client, reactivate_event)
+    assert reactivate_webhook.status_code == 200
+    reactivate_payload = reactivate_webhook.json()
+    assert reactivate_payload.get("received") is True
+    assert reactivate_payload.get("type") == "customer.subscription.updated"
+    assert reactivate_payload.get("handled") is True
+
+    restored_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert restored_quote.status_code in (200, 502)
+
+    restored_payload = restored_quote.json()
+    if restored_quote.status_code == 200:
+        assert restored_payload.get("symbol") == "AAPL"
+        assert restored_payload.get("last_price") is not None
+    else:
+        assert "Upstream provider error" in restored_payload.get("detail", "")
+
+
+@pytest.mark.deployed
 @pytest.mark.critical
 @pytest.mark.mutation
 def test_deployed_customer_session_login_me_logout_flow(
