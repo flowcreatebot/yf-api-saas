@@ -547,6 +547,132 @@ def test_deployed_authenticated_checkout_links_to_customer_account(
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+@pytest.mark.checkout
+def test_deployed_checkout_paid_webhook_customer_journey_records_usage(
+    deployed_client: httpx.Client,
+    deployed_base_url: str,
+    stripe_checkout_checks_enabled: bool,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-checkout-e2e-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    session_payload = (register_response.json().get("session") or {})
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    success_url = f"{deployed_base_url}/dashboard/?checkout=success"
+    cancel_url = f"{deployed_base_url}/dashboard/?checkout=cancel"
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    checkout_payload = checkout_response.json()
+    assert checkout_payload.get("id")
+    assert checkout_payload.get("url")
+    assert str(checkout_payload.get("url", "")).startswith("https://")
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    customer_id = f"cus_checkout_journey_{uuid4().hex[:10]}"
+    subscription_id = f"sub_checkout_journey_{uuid4().hex[:10]}"
+
+    checkout_webhook_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": customer_id,
+                "subscription": subscription_id,
+                "customer_email": email,
+                "payment_status": "paid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    webhook_response = _post_signed_webhook(deployed_client, checkout_webhook_event)
+    assert webhook_response.status_code == 200
+    webhook_payload = webhook_response.json()
+    assert webhook_payload.get("received") is True
+    assert webhook_payload.get("type") == "checkout.session.completed"
+    assert webhook_payload.get("handled") is True
+    assert webhook_payload.get("provisioned_key") is True
+
+    keys_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert keys_response.status_code == 200
+    keys_payload = keys_response.json()
+    assert keys_payload.get("source") == "customer-db-store"
+    keys = ((keys_payload.get("data") or {}).get("keys") or [])
+    assert len(keys) >= 1
+    assert any(key.get("active") is True for key in keys)
+
+    create_key_response = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Checkout Journey Smoke", "env": "test"},
+    )
+    assert create_key_response.status_code == 200
+    create_key_payload = create_key_response.json()
+    assert create_key_payload.get("source") == "customer-db-store"
+
+    raw_key = ((create_key_payload.get("data") or {}).get("rawKey"))
+    assert raw_key
+
+    before_overview = deployed_client.get(
+        "/dashboard/api/overview?range=24h",
+        headers=auth_headers,
+    )
+    assert before_overview.status_code == 200
+    before_requests = int((before_overview.json().get("requests") or 0))
+
+    quote_response = deployed_client.get(
+        "/v1/quote/AAPL",
+        headers={"x-api-key": raw_key},
+    )
+    assert quote_response.status_code in (200, 502)
+
+    quote_payload = quote_response.json()
+    if quote_response.status_code == 200:
+        assert quote_payload.get("symbol") == "AAPL"
+        assert quote_payload.get("last_price") is not None
+    else:
+        assert "Upstream provider error" in quote_payload.get("detail", "")
+
+    after_overview = deployed_client.get(
+        "/dashboard/api/overview?range=24h",
+        headers=auth_headers,
+    )
+    assert after_overview.status_code == 200
+    after_requests = int((after_overview.json().get("requests") or 0))
+    assert after_requests >= before_requests + 1
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_webhook_requires_signature_header_or_secret_not_configured(
     deployed_client: httpx.Client,
 ):
