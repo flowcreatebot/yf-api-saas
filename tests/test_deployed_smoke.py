@@ -1001,6 +1001,108 @@ def test_deployed_unpaid_checkout_then_subscription_created_trialing_provisions_
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+def test_deployed_unpaid_checkout_then_subscription_created_active_provisions_first_key_idempotently(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-sub-created-active-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    session_payload = (register_response.json().get("session") or {})
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    customer_id = f"cus_sub_created_active_{uuid4().hex[:10]}"
+    subscription_id = f"sub_sub_created_active_{uuid4().hex[:10]}"
+
+    checkout_unpaid_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": customer_id,
+                "subscription": subscription_id,
+                "customer_email": email,
+                "payment_status": "unpaid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    unpaid_webhook = _post_signed_webhook(deployed_client, checkout_unpaid_event)
+    assert unpaid_webhook.status_code == 200
+    unpaid_payload = unpaid_webhook.json()
+    assert unpaid_payload.get("received") is True
+    assert unpaid_payload.get("type") == "checkout.session.completed"
+    assert unpaid_payload.get("handled") is True
+    assert unpaid_payload.get("provisioned_key") is False
+
+    subscription_created_active_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": subscription_id,
+                "customer": customer_id,
+                "status": "active",
+                "current_period_end": int(time.time()) + 3600,
+            }
+        },
+    }
+
+    first_create_webhook = _post_signed_webhook(deployed_client, subscription_created_active_event)
+    assert first_create_webhook.status_code == 200
+    first_create_payload = first_create_webhook.json()
+    assert first_create_payload.get("received") is True
+    assert first_create_payload.get("type") == "customer.subscription.created"
+    assert first_create_payload.get("handled") is True
+    assert first_create_payload.get("provisioned_key") is True
+
+    keys_after_first_create_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert keys_after_first_create_response.status_code == 200
+    keys_after_first_create_payload = keys_after_first_create_response.json()
+    assert keys_after_first_create_payload.get("source") == "customer-db-store"
+    keys_after_first_create = ((keys_after_first_create_payload.get("data") or {}).get("keys") or [])
+    assert len(keys_after_first_create) == 1
+    assert keys_after_first_create[0].get("active") is True
+
+    duplicate_create_webhook = _post_signed_webhook(deployed_client, subscription_created_active_event)
+    assert duplicate_create_webhook.status_code == 200
+    duplicate_create_payload = duplicate_create_webhook.json()
+    assert duplicate_create_payload.get("received") is True
+    assert duplicate_create_payload.get("type") == "customer.subscription.created"
+    assert duplicate_create_payload.get("handled") is True
+    assert duplicate_create_payload.get("provisioned_key") is False
+
+    keys_after_duplicate_response = deployed_client.get("/dashboard/api/keys", headers=auth_headers)
+    assert keys_after_duplicate_response.status_code == 200
+    keys_after_duplicate_payload = keys_after_duplicate_response.json()
+    assert keys_after_duplicate_payload.get("source") == "customer-db-store"
+    keys_after_duplicate = ((keys_after_duplicate_payload.get("data") or {}).get("keys") or [])
+    assert len(keys_after_duplicate) == 1
+    assert keys_after_duplicate[0].get("id") == keys_after_first_create[0].get("id")
+    assert keys_after_duplicate[0].get("active") is True
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
 def test_deployed_subscription_deleted_webhook_revokes_market_access(
     deployed_client: httpx.Client,
     stripe_mutation_e2e_checks_enabled: bool,
