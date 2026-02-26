@@ -1,5 +1,15 @@
-from pydantic import Field
+import os
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
+
+
+def _first_non_empty_env(*keys: str) -> str:
+    for key in keys:
+        value = os.getenv(key, "")
+        if value.strip():
+            return value.strip()
+    return ""
 
 
 class Settings(BaseSettings):
@@ -28,6 +38,25 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./dev.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     default_rate_limit: str = Field(default="60/minute", alias="DEFAULT_RATE_LIMIT")
+
+    @model_validator(mode="after")
+    def apply_stripe_env_alias_fallbacks(self) -> "Settings":
+        if not self.stripe_secret_key:
+            self.stripe_secret_key = _first_non_empty_env("STRIPE_API_KEY")
+
+        if not self.stripe_price_id_monthly:
+            self.stripe_price_id_monthly = _first_non_empty_env(
+                "STRIPE_PRICE_ID",
+                "STRIPE_MONTHLY_PRICE_ID",
+            )
+
+        if not self.stripe_webhook_secret:
+            self.stripe_webhook_secret = _first_non_empty_env(
+                "STRIPE_ENDPOINT_SECRET",
+                "STRIPE_WEBHOOK_ENDPOINT_SECRET",
+            )
+
+        return self
 
     class Config:
         env_file = ".env"
