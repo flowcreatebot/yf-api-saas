@@ -721,9 +721,39 @@ def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_acce
     assert blocked_market_response.json()['detail'] == 'Subscription inactive'
 
     with SessionLocal() as db:
+        canceled_subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
+        assert canceled_subscription is not None
+        assert canceled_subscription.status == 'canceled'
+
+    class SubscriptionReactivatedWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.updated',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'active',
+                        'current_period_end': 1769000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', SubscriptionReactivatedWebhook)
+
+    webhook_reactivated_response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert webhook_reactivated_response.status_code == 200
+    assert webhook_reactivated_response.json()['handled'] is True
+
+    restored_market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert restored_market_response.status_code == 200
+    assert restored_market_response.json()['symbol'] == 'AAPL'
+
+    with SessionLocal() as db:
         subscription = db.query(Subscription).filter(Subscription.user_id == user_id).first()
         assert subscription is not None
-        assert subscription.status == 'canceled'
+        assert subscription.status == 'active'
 
         api_key = db.query(APIKey).filter(APIKey.user_id == user_id).first()
         assert api_key is not None
