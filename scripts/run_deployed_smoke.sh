@@ -30,8 +30,11 @@ case "$DEPLOYED_SMOKE_PROFILE" in
   stripe-mutation)
     PYTEST_MARK_EXPR="deployed and billing and mutation and critical"
     ;;
+  stripe-checkout)
+    PYTEST_MARK_EXPR="deployed and billing and mutation and critical and checkout"
+    ;;
   *)
-    echo "[deployed-smoke] invalid DEPLOYED_SMOKE_PROFILE=${DEPLOYED_SMOKE_PROFILE} (expected: staging|production-readonly|stripe-mutation)" >&2
+    echo "[deployed-smoke] invalid DEPLOYED_SMOKE_PROFILE=${DEPLOYED_SMOKE_PROFILE} (expected: staging|production-readonly|stripe-mutation|stripe-checkout)" >&2
     exit 2
     ;;
 esac

@@ -361,6 +361,7 @@ def test_deployed_fundamentals_with_real_key_if_provided(deployed_client: httpx.
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+@pytest.mark.checkout
 def test_deployed_checkout_rejects_insecure_redirect_url(deployed_client: httpx.Client):
     response = deployed_client.post(
         "/v1/billing/checkout/session",
@@ -382,6 +383,7 @@ def test_deployed_checkout_rejects_insecure_redirect_url(deployed_client: httpx.
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+@pytest.mark.checkout
 def test_deployed_checkout_session_happy_path_or_expected_config_guard(
     deployed_client: httpx.Client,
 ):
@@ -415,6 +417,7 @@ def test_deployed_checkout_session_happy_path_or_expected_config_guard(
 @pytest.mark.billing
 @pytest.mark.critical
 @pytest.mark.mutation
+@pytest.mark.checkout
 def test_deployed_authenticated_checkout_links_to_customer_account(
     deployed_client: httpx.Client,
     deployed_base_url: str,
