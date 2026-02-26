@@ -108,6 +108,15 @@ def _provision_first_api_key(user: User, db: Session) -> bool:
     return True
 
 
+def _subscription_status_from_checkout_session(checkout_session: dict) -> str:
+    payment_status = str(checkout_session.get("payment_status") or "").lower()
+    if payment_status == "paid":
+        return "active"
+    if payment_status == "no_payment_required":
+        return "trialing"
+    return "incomplete"
+
+
 def _upsert_subscription_for_user(
     *,
     user: User,
@@ -297,7 +306,7 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
     if event_type == "checkout.session.completed":
         user = _find_user_for_checkout_completed(event_object, db)
         stripe_subscription_id = event_object.get("subscription")
-        status = "active" if event_object.get("payment_status") == "paid" else "incomplete"
+        status = _subscription_status_from_checkout_session(event_object)
 
         if user is not None:
             customer_id = event_object.get("customer")

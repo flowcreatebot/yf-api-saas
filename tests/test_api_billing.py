@@ -759,6 +759,68 @@ def test_webhook_checkout_completed_unpaid_does_not_provision_key(monkeypatch):
         assert key is None
 
 
+def test_webhook_checkout_completed_no_payment_required_provisions_trialing_key_idempotently(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    customer_id = f"cus_trial_checkout_{uuid4().hex[:8]}"
+    subscription_id = f"sub_trial_checkout_{uuid4().hex[:8]}"
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'customer': customer_id,
+                        'subscription': subscription_id,
+                        'customer_email': email,
+                        'payment_status': 'no_payment_required',
+                        'metadata': {'user_id': str(user_id)},
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    first = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert first.status_code == 200
+    assert first.json()['handled'] is True
+    assert first.json()['provisioned_key'] is True
+
+    second = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert second.status_code == 200
+    assert second.json()['handled'] is True
+    assert second.json()['provisioned_key'] is False
+
+    with SessionLocal() as db:
+        subscription = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        assert subscription is not None
+        assert subscription.status == 'trialing'
+
+        active_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert active_key_count == 1
+
+
 @pytest.mark.e2e
 def test_subscription_updated_active_provisions_key_and_enables_market_access(monkeypatch):
     import app.routes.billing as billing
