@@ -315,11 +315,11 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
                 provisioned_key = _provision_first_api_key(user, db)
             handled = True
 
-    elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
         handled, provisioned_key = _mark_customer_subscription_event(
             event_object,
             db,
-            provision_key_on_active_status=event_type == "customer.subscription.updated",
+            provision_key_on_active_status=event_type in {"customer.subscription.created", "customer.subscription.updated"},
         )
 
     db.commit()

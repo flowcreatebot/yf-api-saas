@@ -529,6 +529,72 @@ def test_webhook_subscription_updated_active_provisions_first_key_idempotently(m
         assert active_key_count == 1
 
 
+def test_webhook_subscription_created_trialing_provisions_first_key_idempotently(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    subscription_id = f"sub_created_{uuid4().hex[:8]}"
+    customer_id = f"cus_created_{uuid4().hex[:8]}"
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user.stripe_customer_id = customer_id
+        user_id = user.id
+        db.commit()
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.created',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'trialing',
+                        'current_period_end': 1767000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    first = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert first.status_code == 200
+    assert first.json()['handled'] is True
+    assert first.json()['provisioned_key'] is True
+
+    second = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert second.status_code == 200
+    assert second.json()['handled'] is True
+    assert second.json()['provisioned_key'] is False
+
+    with SessionLocal() as db:
+        subscription_count = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .count()
+        )
+        assert subscription_count == 1
+
+        subscription = db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
+        assert subscription is not None
+        assert subscription.status == 'trialing'
+
+        active_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert active_key_count == 1
+
+
 def test_webhook_subscription_deleted_marks_subscription_canceled(monkeypatch):
     import app.routes.billing as billing
     from app.db import SessionLocal
