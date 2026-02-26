@@ -76,6 +76,13 @@ def _find_user_for_checkout_completed(checkout_session: dict, db: Session) -> Us
         except (TypeError, ValueError):
             user = None
 
+    client_reference_id_raw = checkout_session.get("client_reference_id")
+    if user is None and client_reference_id_raw:
+        try:
+            user = db.query(User).filter(User.id == int(client_reference_id_raw)).first()
+        except (TypeError, ValueError):
+            user = None
+
     customer_id = checkout_session.get("customer")
     if user is None and customer_id:
         user = db.query(User).filter(User.stripe_customer_id == customer_id).first()

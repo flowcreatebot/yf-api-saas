@@ -406,6 +406,56 @@ def test_webhook_checkout_completed_falls_back_to_customer_lookup_without_metada
         assert key is not None
 
 
+def test_webhook_checkout_completed_falls_back_to_client_reference_id_without_metadata_or_customer(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, _token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    subscription_id = f"sub_client_ref_{uuid4().hex[:8]}"
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'checkout.session.completed',
+                'data': {
+                    'object': {
+                        'subscription': subscription_id,
+                        'payment_status': 'paid',
+                        'client_reference_id': str(user_id),
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert response.status_code == 200
+    assert response.json()['handled'] is True
+    assert response.json()['provisioned_key'] is True
+
+    with SessionLocal() as db:
+        subscription = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        assert subscription is not None
+        assert subscription.status == 'active'
+
+        key = db.query(APIKey).filter(APIKey.user_id == user_id, APIKey.status == 'active').first()
+        assert key is not None
+
+
 def test_webhook_checkout_completed_is_idempotent_for_subscription_and_key(monkeypatch):
     import app.routes.billing as billing
     from app.db import SessionLocal
