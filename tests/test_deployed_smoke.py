@@ -89,6 +89,16 @@ def customer_dashboard_checks_enabled() -> bool:
 
 
 @pytest.fixture(scope="module")
+def stripe_checkout_checks_enabled(customer_dashboard_checks_enabled: bool) -> bool:
+    if not _expect_stripe_checkout_checks():
+        pytest.skip(
+            "DEPLOYED_EXPECT_STRIPE_CHECKOUT is not enabled; skipping deployed Stripe checkout session canaries"
+        )
+
+    return True
+
+
+@pytest.fixture(scope="module")
 def stripe_mutation_e2e_checks_enabled(customer_dashboard_checks_enabled: bool) -> bool:
     if not _expect_stripe_mutation_e2e_checks():
         pytest.skip(
@@ -399,6 +409,60 @@ def test_deployed_checkout_session_happy_path_or_expected_config_guard(
             "Stripe secret key not configured",
             "Stripe monthly price id not configured",
         }
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_authenticated_checkout_links_to_customer_account(
+    deployed_client: httpx.Client,
+    deployed_base_url: str,
+    stripe_checkout_checks_enabled: bool,
+):
+    email = f"deployed-checkout-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    token = (((register_response.json().get("session") or {}).get("token")))
+    assert token
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+    success_url = f"{deployed_base_url}/dashboard/?checkout=success"
+    cancel_url = f"{deployed_base_url}/dashboard/?checkout=cancel"
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    checkout_payload = checkout_response.json()
+    assert checkout_payload.get("id")
+    assert checkout_payload.get("url")
+    assert str(checkout_payload.get("url", "")).startswith("https://")
+
+    mismatched_email_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": f"mismatch-{uuid4().hex[:10]}@example.com",
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        },
+    )
+    assert mismatched_email_response.status_code == 403
+    assert mismatched_email_response.json().get("detail") == "Checkout email must match authenticated account"
 
 
 @pytest.mark.deployed
