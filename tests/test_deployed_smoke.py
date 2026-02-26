@@ -990,3 +990,89 @@ def test_deployed_customer_signup_login_then_created_key_enforces_api_auth(
     assert revoked_quote.json().get("detail") == "Invalid API key"
 
 
+@pytest.mark.deployed
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_customer_key_rotate_and_activate_transitions_auth_state(
+    deployed_client: httpx.Client,
+    customer_dashboard_checks_enabled: bool,
+):
+    email = f"deployed-key-lifecycle-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    login_response = deployed_client.post(
+        "/dashboard/api/session/login",
+        json={"email": email, "password": password},
+    )
+    assert login_response.status_code == 200
+
+    token = ((login_response.json().get("session") or {}).get("token"))
+    assert token
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    create_key = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Deployed Lifecycle", "env": "test"},
+    )
+    assert create_key.status_code == 200
+    create_payload = create_key.json()
+    assert create_payload.get("source") == "customer-db-store"
+
+    data = create_payload.get("data") or {}
+    key_id = str((data.get("key") or {}).get("id") or "")
+    raw_key_v1 = data.get("rawKey")
+    assert key_id
+    assert raw_key_v1
+
+    first_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v1})
+    assert first_quote.status_code == 403
+    assert first_quote.json().get("detail") == "Subscription inactive"
+
+    rotate_response = deployed_client.post(
+        f"/dashboard/api/keys/{key_id}/rotate",
+        headers=auth_headers,
+    )
+    assert rotate_response.status_code == 200
+    rotate_payload = rotate_response.json()
+    assert rotate_payload.get("source") == "customer-db-store"
+
+    raw_key_v2 = ((rotate_payload.get("data") or {}).get("rawKey"))
+    assert raw_key_v2
+    assert raw_key_v2 != raw_key_v1
+
+    old_key_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v1})
+    assert old_key_quote.status_code == 401
+    assert old_key_quote.json().get("detail") == "Invalid API key"
+
+    rotated_key_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert rotated_key_quote.status_code == 403
+    assert rotated_key_quote.json().get("detail") == "Subscription inactive"
+
+    revoke_response = deployed_client.post(
+        f"/dashboard/api/keys/{key_id}/revoke",
+        headers=auth_headers,
+    )
+    assert revoke_response.status_code == 200
+
+    revoked_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert revoked_quote.status_code == 401
+    assert revoked_quote.json().get("detail") == "Invalid API key"
+
+    activate_response = deployed_client.post(
+        f"/dashboard/api/keys/{key_id}/activate",
+        headers=auth_headers,
+    )
+    assert activate_response.status_code == 200
+
+    activated_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key_v2})
+    assert activated_quote.status_code == 403
+    assert activated_quote.json().get("detail") == "Subscription inactive"
+
+
