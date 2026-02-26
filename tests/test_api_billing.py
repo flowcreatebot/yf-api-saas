@@ -628,6 +628,113 @@ def test_webhook_checkout_completed_unpaid_does_not_provision_key(monkeypatch):
 
 
 @pytest.mark.e2e
+def test_subscription_updated_active_provisions_key_and_enables_market_access(monkeypatch):
+    import app.routes.billing as billing
+    import app.routes.market as market
+
+    from app.db import SessionLocal
+    from app.models import APIKey, Subscription, User
+
+    email, session_token = _register_customer()
+    customer_id = f"cus_async_{uuid4().hex[:10]}"
+    subscription_id = f"sub_async_{uuid4().hex[:10]}"
+    key_suffix = f"async_{uuid4().hex}"
+
+    class DummyCustomer:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': customer_id}
+
+    class DummyCheckoutSession:
+        @staticmethod
+        def create(**kwargs):
+            return {'id': 'cs_async_123', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {'lastPrice': 456.78}
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    monkeypatch.setattr(billing.stripe, 'Customer', DummyCustomer)
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummyCheckoutSession)
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+
+    checkout_response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {session_token}'},
+        json={
+            'email': email,
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+        assert user.stripe_customer_id == customer_id
+
+    monkeypatch.setattr(billing.secrets, 'token_urlsafe', lambda size: key_suffix)
+
+    class SubscriptionUpdatedWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return {
+                'type': 'customer.subscription.updated',
+                'data': {
+                    'object': {
+                        'id': subscription_id,
+                        'customer': customer_id,
+                        'status': 'active',
+                        'current_period_end': 1769000000,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', SubscriptionUpdatedWebhook)
+
+    first_webhook = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert first_webhook.status_code == 200
+    assert first_webhook.json()['handled'] is True
+    assert first_webhook.json()['provisioned_key'] is True
+
+    second_webhook = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert second_webhook.status_code == 200
+    assert second_webhook.json()['handled'] is True
+    assert second_webhook.json()['provisioned_key'] is False
+
+    raw_key = f"yf_live_{key_suffix}"
+    market_response = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert market_response.status_code == 200
+    assert market_response.json()['symbol'] == 'AAPL'
+
+    with SessionLocal() as db:
+        subscription_count = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .count()
+        )
+        assert subscription_count == 1
+
+        active_key_count = (
+            db.query(APIKey)
+            .filter(APIKey.user_id == user_id, APIKey.status == 'active')
+            .count()
+        )
+        assert active_key_count == 1
+
+
+@pytest.mark.e2e
 def test_full_billing_flow_paid_provisions_key_and_cancellation_revokes_api_access(monkeypatch):
     import app.routes.billing as billing
     import app.routes.market as market
