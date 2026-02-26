@@ -3,6 +3,7 @@ set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 RUN_DEPLOYED="${RUN_DEPLOYED:-0}"
+RUN_DEPLOYED_STRIPE_MUTATION="${RUN_DEPLOYED_STRIPE_MUTATION:-0}"
 
 mkdir -p reports
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
@@ -22,6 +23,7 @@ run_lane() {
   echo "[test-matrix] started_at=$(date -Iseconds)"
   echo "[test-matrix] python_bin=${PYTHON_BIN}"
   echo "[test-matrix] run_deployed=${RUN_DEPLOYED}"
+  echo "[test-matrix] run_deployed_stripe_mutation=${RUN_DEPLOYED_STRIPE_MUTATION}"
 
   run_lane "critical-integration" "integration and critical and not deployed"
   run_lane "billing-integration" "integration and billing and not deployed"
@@ -32,6 +34,13 @@ run_lane() {
   else
     echo ""
     echo "[test-matrix] lane=critical-deployed skipped (set RUN_DEPLOYED=1 to enable)"
+  fi
+
+  if [[ "$RUN_DEPLOYED_STRIPE_MUTATION" == "1" ]]; then
+    run_lane "stripe-mutation-deployed" "deployed and billing and mutation and critical" tests/test_deployed_smoke.py
+  else
+    echo ""
+    echo "[test-matrix] lane=stripe-mutation-deployed skipped (set RUN_DEPLOYED_STRIPE_MUTATION=1 to enable)"
   fi
 } | tee "$REPORT_PATH"
 
