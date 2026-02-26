@@ -46,6 +46,19 @@ def _stripe_signature_header(payload: bytes, *, secret: str) -> str:
     return f"t={timestamp},v1={digest}"
 
 
+def _post_signed_webhook(deployed_client: httpx.Client, event: dict) -> httpx.Response:
+    webhook_payload = json.dumps(event).encode("utf-8")
+    signature_header = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
+    return deployed_client.post(
+        "/v1/billing/webhook/stripe",
+        content=webhook_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": signature_header,
+        },
+    )
+
+
 def _user_id_from_tenant(tenant_id: str) -> int:
     if not tenant_id.startswith("user-"):
         raise AssertionError(f"Unexpected tenantId format: {tenant_id}")
@@ -511,17 +524,7 @@ def test_deployed_checkout_and_signed_webhook_activate_customer_subscription(
         },
     }
 
-    webhook_payload = json.dumps(webhook_event).encode("utf-8")
-    signature_header = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
-
-    webhook_response = deployed_client.post(
-        "/v1/billing/webhook/stripe",
-        content=webhook_payload,
-        headers={
-            "Content-Type": "application/json",
-            "Stripe-Signature": signature_header,
-        },
-    )
+    webhook_response = _post_signed_webhook(deployed_client, webhook_event)
     assert webhook_response.status_code == 200
     webhook_body = webhook_response.json()
     assert webhook_body.get("received") is True
@@ -603,17 +606,7 @@ def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioni
         },
     }
 
-    webhook_payload = json.dumps(webhook_event).encode("utf-8")
-    first_signature = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
-
-    first_webhook = deployed_client.post(
-        "/v1/billing/webhook/stripe",
-        content=webhook_payload,
-        headers={
-            "Content-Type": "application/json",
-            "Stripe-Signature": first_signature,
-        },
-    )
+    first_webhook = _post_signed_webhook(deployed_client, webhook_event)
     assert first_webhook.status_code == 200
     first_body = first_webhook.json()
     assert first_body.get("received") is True
@@ -627,15 +620,7 @@ def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioni
     assert len(first_keys) == 1
     assert first_keys[0].get("active") is True
 
-    second_signature = _stripe_signature_header(webhook_payload, secret=_stripe_webhook_secret())
-    second_webhook = deployed_client.post(
-        "/v1/billing/webhook/stripe",
-        content=webhook_payload,
-        headers={
-            "Content-Type": "application/json",
-            "Stripe-Signature": second_signature,
-        },
-    )
+    second_webhook = _post_signed_webhook(deployed_client, webhook_event)
     assert second_webhook.status_code == 200
     second_body = second_webhook.json()
     assert second_body.get("received") is True
@@ -649,6 +634,108 @@ def test_deployed_checkout_signed_webhook_is_idempotent_for_first_key_provisioni
     assert len(second_keys) == 1
     assert second_keys[0].get("id") == first_keys[0].get("id")
     assert second_keys[0].get("active") is True
+
+
+@pytest.mark.deployed
+@pytest.mark.billing
+@pytest.mark.critical
+@pytest.mark.mutation
+def test_deployed_subscription_deleted_webhook_revokes_market_access(
+    deployed_client: httpx.Client,
+    stripe_mutation_e2e_checks_enabled: bool,
+):
+    email = f"deployed-cancel-{uuid4().hex[:10]}@example.com"
+    password = "SmokePass123!"
+
+    register_response = deployed_client.post(
+        "/dashboard/api/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert register_response.status_code == 200
+
+    register_payload = register_response.json()
+    session_payload = register_payload.get("session") or {}
+    token = session_payload.get("token")
+    tenant_id = session_payload.get("tenantId")
+    assert token
+    assert tenant_id
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    create_key_response = deployed_client.post(
+        "/dashboard/api/keys/create",
+        headers=auth_headers,
+        json={"label": "Cancellation E2E", "env": "test"},
+    )
+    assert create_key_response.status_code == 200
+    raw_key = ((create_key_response.json().get("data") or {}).get("rawKey"))
+    assert raw_key
+
+    user_id = _user_id_from_tenant(str(tenant_id))
+    customer_id = f"cus_cancel_{uuid4().hex[:10]}"
+    subscription_id = f"sub_cancel_{uuid4().hex[:10]}"
+
+    checkout_response = deployed_client.post(
+        "/v1/billing/checkout/session",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+        },
+    )
+    assert checkout_response.status_code == 200
+
+    activate_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "customer": customer_id,
+                "subscription": subscription_id,
+                "customer_email": email,
+                "payment_status": "paid",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "email": email,
+                    "plan_id": "starter-monthly",
+                },
+            }
+        },
+    }
+
+    activate_webhook = _post_signed_webhook(deployed_client, activate_event)
+    assert activate_webhook.status_code == 200
+    activate_payload = activate_webhook.json()
+    assert activate_payload.get("received") is True
+    assert activate_payload.get("handled") is True
+
+    active_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert active_quote.status_code in (200, 502)
+
+    cancel_event = {
+        "id": f"evt_smoke_{uuid4().hex[:14]}",
+        "type": "customer.subscription.deleted",
+        "data": {
+            "object": {
+                "id": subscription_id,
+                "customer": customer_id,
+                "status": "canceled",
+                "current_period_end": int(time.time()),
+            }
+        },
+    }
+
+    cancel_webhook = _post_signed_webhook(deployed_client, cancel_event)
+    assert cancel_webhook.status_code == 200
+    cancel_payload = cancel_webhook.json()
+    assert cancel_payload.get("received") is True
+    assert cancel_payload.get("type") == "customer.subscription.deleted"
+    assert cancel_payload.get("handled") is True
+
+    post_cancel_quote = deployed_client.get("/v1/quote/AAPL", headers={"x-api-key": raw_key})
+    assert post_cancel_quote.status_code == 403
+    assert post_cancel_quote.json().get("detail") == "Subscription inactive"
 
 
 @pytest.mark.deployed
