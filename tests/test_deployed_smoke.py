@@ -19,6 +19,36 @@ def _api_key() -> str:
     return os.getenv("DEPLOYED_API_KEY", "").strip()
 
 
+def _deployed_timeout_seconds() -> float:
+    raw = os.getenv("DEPLOYED_HTTP_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return 20.0
+    try:
+        return max(float(raw), 1.0)
+    except ValueError:
+        return 20.0
+
+
+def _deployed_health_retries() -> int:
+    raw = os.getenv("DEPLOYED_HEALTH_RETRIES", "").strip()
+    if not raw:
+        return 6
+    try:
+        return max(int(raw), 1)
+    except ValueError:
+        return 6
+
+
+def _deployed_health_retry_delay_seconds() -> float:
+    raw = os.getenv("DEPLOYED_HEALTH_RETRY_DELAY_SECONDS", "").strip()
+    if not raw:
+        return 2.0
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        return 2.0
+
+
 def _expect_webhook_secret_checks() -> bool:
     return os.getenv("DEPLOYED_EXPECT_STRIPE_WEBHOOK_SECRET", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -65,6 +95,34 @@ def _user_id_from_tenant(tenant_id: str) -> int:
     return int(tenant_id.split("-", 1)[1])
 
 
+def _wait_for_deployed_health(client: httpx.Client) -> None:
+    retries = _deployed_health_retries()
+    delay_seconds = _deployed_health_retry_delay_seconds()
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = client.get("/v1/health")
+            if response.status_code == 200 and (response.json().get("ok") is True):
+                return
+
+            last_error = AssertionError(
+                f"health endpoint not ready (status={response.status_code}, body={response.text[:200]})"
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            last_error = exc
+
+        if attempt < retries and delay_seconds > 0:
+            time.sleep(delay_seconds)
+
+    if last_error is None:
+        last_error = AssertionError("health endpoint readiness check failed")
+
+    raise AssertionError(
+        f"deployed health check did not become ready after {retries} attempts"
+    ) from last_error
+
+
 @pytest.fixture(scope="module")
 def deployed_base_url() -> str:
     base_url = _base_url()
@@ -75,7 +133,12 @@ def deployed_base_url() -> str:
 
 @pytest.fixture(scope="module")
 def deployed_client(deployed_base_url: str):
-    with httpx.Client(base_url=deployed_base_url, timeout=20.0, follow_redirects=True) as client:
+    with httpx.Client(
+        base_url=deployed_base_url,
+        timeout=_deployed_timeout_seconds(),
+        follow_redirects=True,
+    ) as client:
+        _wait_for_deployed_health(client)
         yield client
 
 
