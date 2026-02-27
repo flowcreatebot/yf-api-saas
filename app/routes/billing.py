@@ -124,6 +124,15 @@ def _subscription_status_from_checkout_session(checkout_session: dict) -> str:
     return "incomplete"
 
 
+def _merge_checkout_subscription_status(*, existing_status: str | None, incoming_status: str) -> str:
+    if (
+        incoming_status not in _ACTIVE_SUBSCRIPTION_STATUSES
+        and (existing_status or "") in _ACTIVE_SUBSCRIPTION_STATUSES
+    ):
+        return str(existing_status)
+    return incoming_status
+
+
 def _upsert_subscription_for_user(
     *,
     user: User,
@@ -161,7 +170,10 @@ def _upsert_subscription_for_user(
     else:
         if stripe_subscription_id:
             subscription.stripe_subscription_id = stripe_subscription_id
-        subscription.status = status
+        subscription.status = _merge_checkout_subscription_status(
+            existing_status=subscription.status,
+            incoming_status=status,
+        )
         subscription.plan = settings.billing_starter_plan_id
         subscription.current_period_end = current_period_end
 

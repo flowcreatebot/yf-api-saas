@@ -989,6 +989,103 @@ def test_webhook_checkout_completed_unpaid_does_not_provision_key(monkeypatch):
         assert key is None
 
 
+def test_checkout_completed_unpaid_retry_does_not_downgrade_existing_active_subscription(monkeypatch):
+    import app.routes.billing as billing
+    import app.routes.market as market
+
+    from app.db import SessionLocal
+    from app.models import Subscription, User
+
+    email, session_token = _register_customer()
+
+    create_key_response = client.post(
+        '/dashboard/api/keys/create',
+        headers={'Authorization': f'Bearer {session_token}'},
+        json={'label': 'downgrade-guard', 'env': 'test'},
+    )
+    assert create_key_response.status_code == 200
+    raw_key = ((create_key_response.json().get('data') or {}).get('rawKey'))
+    assert raw_key
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user_id = user.id
+
+    class DummyTicker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            return {'lastPrice': 321.0}
+
+    monkeypatch.setattr(market.yf, 'Ticker', DummyTicker)
+    monkeypatch.setattr(settings, 'stripe_webhook_secret', 'whsec_mock')
+
+    customer_id = f"cus_retry_{uuid4().hex[:8]}"
+    subscription_id = f"sub_retry_{uuid4().hex[:8]}"
+
+    event_holder = {
+        'event': {
+            'type': 'checkout.session.completed',
+            'data': {
+                'object': {
+                    'customer': customer_id,
+                    'subscription': subscription_id,
+                    'customer_email': email,
+                    'payment_status': 'paid',
+                    'metadata': {'user_id': str(user_id)},
+                }
+            },
+        }
+    }
+
+    class DummyWebhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            return event_holder['event']
+
+    monkeypatch.setattr(billing.stripe, 'Webhook', DummyWebhook)
+
+    activate_response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert activate_response.status_code == 200
+    assert activate_response.json()['handled'] is True
+
+    active_quote = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert active_quote.status_code == 200
+
+    event_holder['event'] = {
+        'type': 'checkout.session.completed',
+        'data': {
+            'object': {
+                'customer': customer_id,
+                'subscription': subscription_id,
+                'customer_email': email,
+                'payment_status': 'unpaid',
+                'metadata': {'user_id': str(user_id)},
+            }
+        },
+    }
+
+    unpaid_retry_response = client.post('/v1/billing/webhook/stripe', data='{}', headers={'Stripe-Signature': 'sig_mock'})
+    assert unpaid_retry_response.status_code == 200
+    assert unpaid_retry_response.json()['handled'] is True
+    assert unpaid_retry_response.json()['provisioned_key'] is False
+
+    still_active_quote = client.get('/v1/quote/AAPL', headers={'x-api-key': raw_key})
+    assert still_active_quote.status_code == 200
+
+    with SessionLocal() as db:
+        subscription = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == user_id, Subscription.stripe_subscription_id == subscription_id)
+            .first()
+        )
+        assert subscription is not None
+        assert subscription.status == 'active'
+
+
 def test_webhook_checkout_completed_no_payment_required_provisions_trialing_key_idempotently(monkeypatch):
     import app.routes.billing as billing
     from app.db import SessionLocal
