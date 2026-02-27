@@ -193,6 +193,57 @@ def test_checkout_session_attaches_authenticated_customer(monkeypatch):
         assert calls['checkout']['metadata']['user_id'] == str(user.id)
 
 
+def test_checkout_session_reuses_existing_authenticated_stripe_customer(monkeypatch):
+    import app.routes.billing as billing
+    from app.db import SessionLocal
+    from app.models import User
+
+    email, token = _register_customer()
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        user.stripe_customer_id = 'cus_existing'
+        db.commit()
+
+    monkeypatch.setattr(settings, 'billing_allowed_redirect_hosts', '')
+    monkeypatch.setattr(settings, 'stripe_secret_key', 'sk_test_mock')
+    monkeypatch.setattr(settings, 'stripe_price_id_monthly', 'price_mock')
+
+    calls: dict[str, dict] = {}
+
+    class DummyCustomer:
+        @staticmethod
+        def create(**kwargs):
+            raise AssertionError(f"Unexpected Stripe customer create call: {kwargs}")
+
+    class DummySession:
+        @staticmethod
+        def create(**kwargs):
+            calls['checkout'] = kwargs
+            return {'id': 'cs_test_existing', 'url': 'https://checkout.stripe.test/session', 'status': 'open'}
+
+    monkeypatch.setattr(billing.stripe, 'Customer', DummyCustomer)
+    monkeypatch.setattr(billing.stripe.checkout, 'Session', DummySession)
+
+    response = client.post(
+        '/v1/billing/checkout/session',
+        headers={'Authorization': f'Bearer {token}'},
+        json={
+            'email': email,
+            'success_url': 'https://example.com/success',
+            'cancel_url': 'https://example.com/cancel',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['id'] == 'cs_test_existing'
+
+    assert calls['checkout']['customer'] == 'cus_existing'
+    assert 'customer_email' not in calls['checkout']
+
+
+
 def test_checkout_session_rejects_mismatched_authenticated_email(monkeypatch):
     import app.routes.billing as billing
 
