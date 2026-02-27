@@ -42,18 +42,27 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def apply_stripe_env_alias_fallbacks(self) -> "Settings":
         if not self.stripe_secret_key:
-            self.stripe_secret_key = _first_non_empty_env("STRIPE_API_KEY")
+            self.stripe_secret_key = _first_non_empty_env(
+                "STRIPE_API_KEY",
+                "STRIPE_KEY",
+                "STRIPE_SECRET",
+            )
 
         if not self.stripe_price_id_monthly:
             self.stripe_price_id_monthly = _first_non_empty_env(
                 "STRIPE_PRICE_ID",
                 "STRIPE_MONTHLY_PRICE_ID",
+                "STRIPE_PRICE_ID_STARTER_MONTHLY",
+                "STRIPE_MONTHLY_PRICE",
+                "STRIPE_PRICE",
             )
 
         if not self.stripe_webhook_secret:
             self.stripe_webhook_secret = _first_non_empty_env(
                 "STRIPE_ENDPOINT_SECRET",
                 "STRIPE_WEBHOOK_ENDPOINT_SECRET",
+                "STRIPE_SIGNING_SECRET",
+                "STRIPE_WEBHOOK_SIGNING_SECRET",
             )
 
         return self
